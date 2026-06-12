@@ -1476,6 +1476,14 @@ class BenchmarkUtilsTests(unittest.TestCase):
             "ref_audio": "/tmp/ref.wav",
             "ref_text": "参考",
             "language_id": "zh",
+            "preprocess_prompt": False,
+        }
+        default_preprocess = {
+            "id": "r3",
+            "text": "默认预处理",
+            "ref_audio": "/tmp/ref.wav",
+            "ref_text": "参考",
+            "language_id": "zh",
         }
         key = _voice_registration_key(first)
         voice_id = _voice_id_for_registration_key(key)
@@ -1488,6 +1496,7 @@ class BenchmarkUtilsTests(unittest.TestCase):
             "http://127.0.0.1:8000/v1/voices",
         )
         self.assertEqual(_voice_registration_key(second), key)
+        self.assertNotEqual(_voice_registration_key(default_preprocess), key)
         self.assertTrue(voice_id.startswith("bench_voice_"))
         self.assertEqual(payload["voice_id"], voice_id)
         self.assertEqual(payload["ref_audio"], "/tmp/ref.wav")
@@ -1550,6 +1559,71 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(rewritten[0]["voice_id"], rewritten[1]["voice_id"])
         self.assertEqual(rewritten[2]["voice_id"], "already-registered")
         self.assertNotIn("ref_audio", rewritten[0])
+
+    def test_pre_register_voices_keeps_preprocess_prompt_variants_distinct(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.status_code = 200
+                self._payload = payload
+                self.text = json.dumps(payload)
+
+            def json(self):
+                return self._payload
+
+        class FakeClient:
+            def __init__(self):
+                self.posts = []
+
+            async def post(self, url, json):
+                self.posts.append({"url": url, "json": json})
+                return FakeResponse({"voice_id": json["voice_id"], "registered": True})
+
+        samples = [
+            {
+                "id": "r1",
+                "text": "你好",
+                "ref_audio": "/tmp/ref.wav",
+                "ref_text": "参考",
+                "preprocess_prompt": False,
+            },
+            {
+                "id": "r2",
+                "text": "第二句",
+                "ref_audio": "/tmp/ref.wav",
+                "ref_text": "参考",
+            },
+        ]
+        client = FakeClient()
+
+        rewritten, report = asyncio.run(
+            _pre_register_voices(
+                client=client,
+                voice_register_url="http://127.0.0.1:8000/v1/voices",
+                samples=samples,
+            )
+        )
+
+        self.assertEqual(len(client.posts), 2)
+        self.assertEqual(report["num_registered_voices"], 2)
+        self.assertEqual(report["num_rewritten_samples"], 2)
+        self.assertNotEqual(rewritten[0]["voice_id"], rewritten[1]["voice_id"])
+        self.assertFalse(client.posts[0]["json"]["preprocess_prompt"])
+        self.assertNotIn("preprocess_prompt", client.posts[1]["json"])
+
+    def test_voice_pre_registration_rejects_non_bool_preprocess_prompt(self):
+        sample = {
+            "id": "r1",
+            "text": "你好",
+            "ref_audio": "/tmp/ref.wav",
+            "ref_text": "参考",
+            "preprocess_prompt": "false",
+        }
+
+        with self.assertRaisesRegex(ValueError, "preprocess_prompt must be bool"):
+            _voice_registration_key(sample)
+
+        with self.assertRaisesRegex(ValueError, "preprocess_prompt must be bool"):
+            _voice_registration_payload(sample, voice_id="speaker-a")
 
     def test_stepwise_local_voice_pre_registration_reuses_prompts(self):
         class FakeScheduler:

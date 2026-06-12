@@ -15,6 +15,7 @@ from typing import Any, Optional
 import soundfile as sf
 
 from omnivoice.cli.benchmark_utils import summarize_request_results
+from omnivoice.models.generation import ensure_bool
 from omnivoice.utils.common import str2bool
 from omnivoice.utils.data_utils import read_test_list
 
@@ -84,10 +85,12 @@ def _voice_registration_key(sample: dict[str, Any]) -> Optional[tuple[Any, ...]]
         return None
     if ref_audio and ref_audio_base64:
         raise ValueError("sample provides both ref_audio and ref_audio_base64")
+    preprocess_prompt = _optional_preprocess_prompt(sample)
     return (
         "base64" if ref_audio_base64 else "path",
         ref_audio_base64 or ref_audio,
         sample.get("ref_text"),
+        preprocess_prompt,
     )
 
 
@@ -103,11 +106,21 @@ def _voice_registration_payload(
     voice_id: str,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"voice_id": voice_id}
-    for key in ("ref_audio", "ref_audio_base64", "ref_text", "preprocess_prompt"):
+    for key in ("ref_audio", "ref_audio_base64", "ref_text"):
         value = sample.get(key)
         if value is not None:
             payload[key] = value
+    preprocess_prompt = _optional_preprocess_prompt(sample)
+    if preprocess_prompt is not None:
+        payload["preprocess_prompt"] = preprocess_prompt
     return payload
+
+
+def _optional_preprocess_prompt(sample: dict[str, Any]) -> Optional[bool]:
+    value = sample.get("preprocess_prompt")
+    if value is None:
+        return None
+    return ensure_bool(value, "preprocess_prompt")
 
 
 def _sample_with_registered_voice_id(
