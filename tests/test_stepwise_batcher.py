@@ -78,6 +78,15 @@ class _VectorModel:
         return pred_tokens, scores.expand(batch_size, codebooks, target_len).clone()
 
 
+class _PreprocessCountingModel:
+    def __init__(self):
+        self.preprocess_calls = 0
+
+    def _preprocess_all(self, **kwargs):
+        self.preprocess_calls += 1
+        raise AssertionError("_preprocess_all should not be called")
+
+
 class StepwiseAdmissionTests(unittest.TestCase):
     def setUp(self):
         self.loop = asyncio.new_event_loop()
@@ -85,9 +94,13 @@ class StepwiseAdmissionTests(unittest.TestCase):
     def tearDown(self):
         self.loop.close()
 
-    def _waiting(self, request_id, cost, *, context=None):
+    def _waiting(self, request_id, cost, *, context=None, **request_kwargs):
         return _WaitingRequest(
-            request=OmniVoiceBatchRequest(request_id=request_id, text=request_id),
+            request=OmniVoiceBatchRequest(
+                request_id=request_id,
+                text=request_id,
+                **request_kwargs,
+            ),
             future=self.loop.create_future(),
             loop=self.loop,
             enqueued_at=time.monotonic(),
@@ -345,6 +358,35 @@ class StepwiseAdmissionTests(unittest.TestCase):
         req = OmniVoiceBatchRequest(request_id="x", text="ignored", duration=2.5)
 
         self.assertEqual(scheduler._estimate_target_tokens(req), 125)
+
+    def test_invalid_enforce_output_duration_flag_fails_before_preprocess(self):
+        model = _PreprocessCountingModel()
+        scheduler = StepwiseOmniVoiceScheduler(model=model)
+        waiting = self._waiting(
+            "bad",
+            25,
+            enforce_output_duration="false",
+        )
+
+        with self.assertRaisesRegex(ValueError, "enforce_output_duration.*bool"):
+            scheduler._prepare_running(waiting)
+
+        self.assertEqual(model.preprocess_calls, 0)
+
+    def test_invalid_default_enforce_output_duration_fails_before_preprocess(self):
+        model = _PreprocessCountingModel()
+        generation_config = OmniVoiceGenerationConfig()
+        generation_config.enforce_output_duration = "false"
+        scheduler = StepwiseOmniVoiceScheduler(
+            model=model,
+            generation_config=generation_config,
+        )
+        waiting = self._waiting("bad-default", 25)
+
+        with self.assertRaisesRegex(ValueError, "enforce_output_duration.*bool"):
+            scheduler._prepare_running(waiting)
+
+        self.assertEqual(model.preprocess_calls, 0)
 
     def test_static_step_shape_uses_fixed_slots_and_length_buckets(self):
         scheduler = StepwiseOmniVoiceScheduler(

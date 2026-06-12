@@ -17,7 +17,11 @@ from typing import Any, Callable, Deque, Optional
 
 import torch
 
-from omnivoice.models.generation import OmniVoiceGenerationConfig, fit_audio_to_duration
+from omnivoice.models.generation import (
+    OmniVoiceGenerationConfig,
+    fit_audio_to_duration,
+    resolve_optional_bool_flags,
+)
 from omnivoice.serving.batcher import (
     OmniVoiceBatchRequest,
     OmniVoiceBatchResult,
@@ -639,6 +643,12 @@ class StepwiseOmniVoiceScheduler:
 
     def _prepare_running(self, waiting: _WaitingRequest) -> _RunningRequest:
         request = waiting.request
+        enforce_output_duration = resolve_optional_bool_flags(
+            request.enforce_output_duration,
+            1,
+            "enforce_output_duration",
+            default=self.generation_config.enforce_output_duration,
+        )[0]
         kwargs: dict[str, Any] = {
             "text": request.text,
             "language": request.language,
@@ -675,11 +685,7 @@ class StepwiseOmniVoiceScheduler:
             requested_duration=task.requested_durations[0]
             if task.requested_durations
             else None,
-            enforce_output_duration=(
-                self.generation_config.enforce_output_duration
-                if request.enforce_output_duration is None
-                else bool(request.enforce_output_duration)
-            ),
+            enforce_output_duration=enforce_output_duration,
             started_at=time.monotonic(),
         )
 
