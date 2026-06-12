@@ -38,6 +38,10 @@ class OmniVoiceGenerationConfig:
         self.generation_mode = mode
         for key, value in GENERATION_MODE_PRESETS[mode].items():
             setattr(self, key, value)
+        self.enforce_output_duration = ensure_bool(
+            self.enforce_output_duration,
+            "enforce_output_duration",
+        )
 
     @classmethod
     def from_dict(cls, kwargs_dict):
@@ -92,6 +96,12 @@ def resolve_generation_config(
     return replace(config, generation_mode=mode, **preset)
 
 
+def ensure_bool(value: bool, name: str) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    raise ValueError(f"{name} must be bool")
+
+
 def ensure_optional_bool_list(
     value: Union[bool, list[Optional[bool]], None],
     batch_size: int,
@@ -139,12 +149,11 @@ def resolve_optional_bool_flags(
     *,
     default: bool,
 ) -> list[bool]:
-    if not isinstance(default, (bool, np.bool_)):
-        raise ValueError(f"{name} default must be bool")
+    default_value = ensure_bool(default, f"{name} default")
     values = ensure_optional_bool_list(value, batch_size, name)
     if values is None:
-        return [bool(default)] * batch_size
-    return [bool(default) if item is None else bool(item) for item in values]
+        return [default_value] * batch_size
+    return [default_value if item is None else bool(item) for item in values]
 
 
 def fit_audio_to_duration(

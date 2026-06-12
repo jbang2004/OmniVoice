@@ -54,6 +54,15 @@ class OmniVoicePreprocessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown generation_mode"):
             OmniVoiceGenerationConfig(generation_mode="mystery")
 
+    def test_generation_config_rejects_non_bool_strict_duration_default(self):
+        with self.assertRaisesRegex(ValueError, "enforce_output_duration must be bool"):
+            OmniVoiceGenerationConfig(enforce_output_duration="false")
+
+        with self.assertRaisesRegex(ValueError, "enforce_output_duration must be bool"):
+            OmniVoiceGenerationConfig.from_dict(
+                {"enforce_output_duration": "false"}
+            )
+
     def test_fit_audio_to_duration_pads_and_crops_last_axis(self):
         mono = np.arange(4, dtype=np.float32)
         padded = fit_audio_to_duration(mono, 0.006, sample_rate=1000)
