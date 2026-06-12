@@ -1559,8 +1559,15 @@ class OmniVoice(PreTrainedModel):
     ) -> Optional[List[Optional[float]]]:
         if x is None:
             return None
-        if isinstance(x, (int, float)):
+        if isinstance(x, (bool, np.bool_)):
+            raise ValueError(f"{name} values must be positive numbers or None")
+        if isinstance(x, (int, float, np.integer, np.floating)):
             values: List[Optional[float]] = [float(x)] * batch_size
+        elif isinstance(x, (str, bytes)):
+            raise ValueError(
+                f"{name} should be a positive number or a list with length "
+                f"1 or batch size {batch_size}"
+            )
         else:
             values = list(x)
             if len(values) not in (1, batch_size):
@@ -1574,6 +1581,8 @@ class OmniVoice(PreTrainedModel):
         for value in values:
             if value is None:
                 continue
+            if isinstance(value, (bool, np.bool_, str, bytes)):
+                raise ValueError(f"{name} values must be positive numbers or None")
             try:
                 numeric = float(value)
             except (TypeError, ValueError) as exc:

@@ -225,6 +225,41 @@ class OmniVoicePreprocessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "speed values must be positive"):
             model._preprocess_all(text="hello", speed=-1)
 
+    def test_preprocess_rejects_bool_and_string_duration_and_speed(self):
+        model = _bare_model()
+
+        invalid_cases = (
+            {"duration": True},
+            {"duration": [True]},
+            {"duration": "1.0"},
+            {"duration": ["1.0"]},
+            {"speed": False},
+            {"speed": [False]},
+            {"speed": "1.5"},
+            {"speed": ["1.5"]},
+        )
+
+        for kwargs in invalid_cases:
+            field_name = "duration" if "duration" in kwargs else "speed"
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    f"{field_name}.*positive number",
+                ):
+                    model._preprocess_all(text="hello", **kwargs)
+
+    def test_preprocess_accepts_numpy_numeric_duration_and_speed(self):
+        model = _bare_model()
+
+        task = model._preprocess_all(
+            text="hello",
+            duration=np.float32(2.0),
+            speed=np.float64(1.2),
+        )
+
+        self.assertEqual(task.requested_durations, [2.0])
+        self.assertEqual(task.target_lens, [50])
+
     def test_enforce_output_duration_flags_support_per_item_override(self):
         model = _bare_model()
 
