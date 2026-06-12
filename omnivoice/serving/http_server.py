@@ -211,6 +211,15 @@ def create_online_batch_app(
     )
     app.state.omnivoice = state
 
+    def bad_request(message: str) -> HTTPException:
+        return HTTPException(
+            status_code=400,
+            detail={
+                "code": "bad_request",
+                "message": message,
+            },
+        )
+
     def build_request(payload: TTSRequest) -> OmniVoiceBatchRequest:
         if len(payload.text) > state.max_request_text_chars:
             raise HTTPException(
@@ -218,26 +227,22 @@ def create_online_batch_app(
                 detail=f"text exceeds {state.max_request_text_chars} characters",
             )
         if payload.ref_audio and payload.ref_audio_base64:
-            raise HTTPException(
-                status_code=400,
-                detail="Provide only one of ref_audio or ref_audio_base64",
+            raise bad_request(
+                "Provide only one of ref_audio or ref_audio_base64"
             )
         if payload.voice_id and (
             payload.ref_audio or payload.ref_audio_base64 or payload.instruct
         ):
-            raise HTTPException(
-                status_code=400,
-                detail="Provide either voice_id, ref_audio/ref_audio_base64, or instruct",
+            raise bad_request(
+                "Provide either voice_id, ref_audio/ref_audio_base64, or instruct"
             )
         if payload.ref_audio is not None and payload.instruct is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="Provide either ref_audio/ref_audio_base64 or instruct, not both",
+            raise bad_request(
+                "Provide either ref_audio/ref_audio_base64 or instruct, not both"
             )
         if payload.ref_audio_base64 is not None and payload.instruct is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="Provide either ref_audio/ref_audio_base64 or instruct, not both",
+            raise bad_request(
+                "Provide either ref_audio/ref_audio_base64 or instruct, not both"
             )
 
         voice_clone_prompt = None
@@ -262,36 +267,35 @@ def create_online_batch_app(
                     state.sample_rate,
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise bad_request(str(exc)) from exc
             ref_audio_cache_key = ("base64-sha256", raw_hash)
 
-        return OmniVoiceBatchRequest(
-            request_id=payload.request_id or uuid.uuid4().hex,
-            text=payload.text,
-            language=payload.language_id or payload.language,
-            ref_audio=ref_audio,
-            ref_audio_cache_key=ref_audio_cache_key,
-            ref_text=payload.ref_text,
-            voice_clone_prompt=voice_clone_prompt,
-            instruct=payload.instruct,
-            duration=payload.duration,
-            speed=payload.speed,
-            enforce_output_duration=payload.enforce_output_duration,
-            cost_tokens_hint=payload.cost_tokens_hint,
-            priority=payload.priority,
-        )
+        try:
+            return OmniVoiceBatchRequest(
+                request_id=payload.request_id or uuid.uuid4().hex,
+                text=payload.text,
+                language=payload.language_id or payload.language,
+                ref_audio=ref_audio,
+                ref_audio_cache_key=ref_audio_cache_key,
+                ref_text=payload.ref_text,
+                voice_clone_prompt=voice_clone_prompt,
+                instruct=payload.instruct,
+                duration=payload.duration,
+                speed=payload.speed,
+                enforce_output_duration=payload.enforce_output_duration,
+                cost_tokens_hint=payload.cost_tokens_hint,
+                priority=payload.priority,
+            )
+        except ValueError as exc:
+            raise bad_request(str(exc)) from exc
 
     def build_voice_prompt_audio(payload: VoicePromptRequest) -> tuple[Any, Optional[tuple[Any, ...]]]:
         if payload.ref_audio and payload.ref_audio_base64:
-            raise HTTPException(
-                status_code=400,
-                detail="Provide only one of ref_audio or ref_audio_base64",
+            raise bad_request(
+                "Provide only one of ref_audio or ref_audio_base64"
             )
         if not payload.ref_audio and not payload.ref_audio_base64:
-            raise HTTPException(
-                status_code=400,
-                detail="Provide ref_audio or ref_audio_base64",
-            )
+            raise bad_request("Provide ref_audio or ref_audio_base64")
         if payload.ref_audio_base64 is None:
             return payload.ref_audio, None
 
@@ -302,7 +306,7 @@ def create_online_batch_app(
                 state.sample_rate,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise bad_request(str(exc)) from exc
         return ref_audio, ("base64-sha256", raw_hash)
 
     def server_runtime_snapshot() -> dict[str, Any]:
@@ -390,6 +394,8 @@ def create_online_batch_app(
             )
         except RuntimeError as exc:
             raise map_scheduler_runtime_error(exc) from exc
+        except ValueError as exc:
+            raise bad_request(str(exc)) from exc
         state.voice_prompts.put(voice_id, prompt)
         return {
             "voice_id": voice_id,

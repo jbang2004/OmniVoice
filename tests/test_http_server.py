@@ -389,6 +389,7 @@ class HttpServerTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"]["code"], "bad_request")
 
     def test_queue_full_maps_to_429(self):
         scheduler = FailingScheduler(RuntimeError("OmniVoice scheduler queue is full"))
@@ -433,6 +434,22 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["detail"]["code"], "generation_failed")
         self.assertIn("model exploded", response.json()["detail"]["message"])
+
+    def test_tts_request_boundary_validation_maps_to_structured_400(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/tts",
+                json={
+                    "request_id": "   ",
+                    "text": "hello",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"]["code"], "bad_request")
+        self.assertIn("request_id", response.json()["detail"]["message"])
+        self.assertEqual(scheduler.requests, [])
 
     def test_register_voice_prompt_and_use_voice_id(self):
         scheduler = FakeScheduler()
@@ -483,6 +500,22 @@ class HttpServerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertEqual(scheduler.prompt_requests, [])
+
+    def test_voice_prompt_validation_failure_maps_to_structured_400(self):
+        scheduler = FailingPromptScheduler(ValueError("invalid prompt audio"))
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/voices",
+                json={
+                    "voice_id": "speaker-a",
+                    "ref_audio_base64": _wav_base64(),
+                    "ref_text": "参考音频",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"]["code"], "bad_request")
+        self.assertIn("invalid prompt audio", response.json()["detail"]["message"])
 
     def test_voice_registry_is_bounded_and_lru_evicted(self):
         scheduler = FakeScheduler()
@@ -602,6 +635,7 @@ class HttpServerTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"]["code"], "bad_request")
 
 
 if __name__ == "__main__":
