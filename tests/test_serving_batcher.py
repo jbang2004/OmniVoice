@@ -163,6 +163,56 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
             mode=mode,
         )
 
+    async def test_batch_request_rejects_invalid_values(self):
+        invalid_cases = (
+            ({"request_id": "", "text": "hello"}, "request_id.*non-empty string"),
+            ({"request_id": "r", "text": ""}, "text.*non-empty string"),
+            ({"request_id": "r", "text": "hello", "language": 123}, "language.*string"),
+            (
+                {"request_id": "r", "text": "hello", "duration": "1.0"},
+                "duration.*positive number",
+            ),
+            (
+                {"request_id": "r", "text": "hello", "speed": False},
+                "speed.*positive number",
+            ),
+            (
+                {
+                    "request_id": "r",
+                    "text": "hello",
+                    "enforce_output_duration": "false",
+                },
+                "enforce_output_duration.*bool",
+            ),
+            (
+                {"request_id": "r", "text": "hello", "cost_tokens_hint": 1.5},
+                "cost_tokens_hint.*positive integer",
+            ),
+            ({"request_id": "r", "text": "hello", "priority": "urgent"}, "priority"),
+        )
+
+        for kwargs, message in invalid_cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaisesRegex(ValueError, message):
+                    OmniVoiceBatchRequest(**kwargs)
+
+    async def test_batch_request_normalizes_numpy_scalar_controls(self):
+        request = OmniVoiceBatchRequest(
+            request_id="r",
+            text="hello",
+            duration=np.float32(1.25),
+            speed=np.float64(1.5),
+            enforce_output_duration=np.bool_(True),
+            cost_tokens_hint=np.int64(77),
+            priority="high",
+        )
+
+        self.assertEqual(request.duration, 1.25)
+        self.assertEqual(request.speed, 1.5)
+        self.assertTrue(request.enforce_output_duration)
+        self.assertEqual(request.cost_tokens_hint, 77)
+        self.assertEqual(request.priority, "high")
+
     async def test_full_batch_dispatches_together(self):
         model = FakeModel()
         scheduler = OmniVoiceBatchScheduler(
@@ -843,22 +893,13 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([len(item.future.result().audio) for item in queued], [8, 5, 3])
         self.assertEqual(model.kwargs["enforce_output_duration"], [True, False, True])
 
-    async def test_invalid_output_duration_enforcement_flag_fails_fast(self):
-        model = FakeModel()
-        scheduler = OmniVoiceBatchScheduler(model)
-        queued = [
+    async def test_invalid_output_duration_enforcement_flag_fails_at_request_boundary(self):
+        with self.assertRaisesRegex(ValueError, "enforce_output_duration.*bool"):
             self._queued(
                 "bad",
                 25,
                 enforce_output_duration="false",
             )
-        ]
-
-        scheduler._execute_batch(queued, "full")
-        await asyncio.sleep(0)
-
-        self.assertIsInstance(queued[0].future.exception(), ValueError)
-        self.assertEqual(model.calls, [])
 
     async def test_invalid_default_output_duration_enforcement_fails_fast(self):
         model = FakeModel()

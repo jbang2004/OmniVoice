@@ -48,6 +48,20 @@ def _ensure_min_float(value: float, name: str, minimum: float) -> float:
     return normalized
 
 
+def _ensure_non_empty_str(value: str, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _ensure_optional_str(value: Optional[str], name: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string or None")
+    return value
+
+
 @dataclass(frozen=True)
 class BatchSchedulerConfig:
     """Latency/throughput policy for a single resident OmniVoice instance."""
@@ -159,6 +173,49 @@ class OmniVoiceBatchRequest:
     enforce_output_duration: Optional[bool] = None
     cost_tokens_hint: Optional[int] = None
     priority: str = "normal"
+
+    def __post_init__(self):
+        object.__setattr__(
+            self,
+            "request_id",
+            _ensure_non_empty_str(self.request_id, "request_id"),
+        )
+        object.__setattr__(
+            self,
+            "text",
+            _ensure_non_empty_str(self.text, "text"),
+        )
+        for field_name in ("language", "ref_text", "instruct"):
+            object.__setattr__(
+                self,
+                field_name,
+                _ensure_optional_str(getattr(self, field_name), field_name),
+            )
+        for field_name in ("duration", "speed"):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(
+                    self,
+                    field_name,
+                    ensure_positive_float(value, field_name),
+                )
+        if self.enforce_output_duration is not None:
+            object.__setattr__(
+                self,
+                "enforce_output_duration",
+                ensure_bool(
+                    self.enforce_output_duration,
+                    "enforce_output_duration",
+                ),
+            )
+        if self.cost_tokens_hint is not None:
+            object.__setattr__(
+                self,
+                "cost_tokens_hint",
+                ensure_positive_int(self.cost_tokens_hint, "cost_tokens_hint"),
+            )
+        if self.priority not in {"normal", "high"}:
+            raise ValueError("priority must be 'normal' or 'high'")
 
 
 @dataclass(frozen=True)

@@ -401,17 +401,15 @@ class StepwiseAdmissionTests(unittest.TestCase):
         self.assertEqual(config.max_context_padding_ratio, 0.0)
         self.assertEqual(config.prompt_cache_entries, 0)
 
-    def test_invalid_enforce_output_duration_flag_fails_before_preprocess(self):
+    def test_invalid_enforce_output_duration_flag_fails_at_request_boundary(self):
         model = _PreprocessCountingModel()
-        scheduler = StepwiseOmniVoiceScheduler(model=model)
-        waiting = self._waiting(
-            "bad",
-            25,
-            enforce_output_duration="false",
-        )
 
         with self.assertRaisesRegex(ValueError, "enforce_output_duration.*bool"):
-            scheduler._prepare_running(waiting)
+            self._waiting(
+                "bad",
+                25,
+                enforce_output_duration="false",
+            )
 
         self.assertEqual(model.preprocess_calls, 0)
 
