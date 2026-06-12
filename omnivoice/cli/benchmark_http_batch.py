@@ -262,6 +262,52 @@ def _audio_seconds_from_wav(raw: bytes) -> Optional[float]:
         return None
 
 
+def _response_json(response: Any) -> Optional[Any]:
+    try:
+        return response.json()
+    except Exception:
+        return None
+
+
+def _response_error_message(response: Any) -> str:
+    payload = _response_json(response)
+    if isinstance(payload, dict):
+        detail = payload.get("detail", payload)
+        if isinstance(detail, dict):
+            code = detail.get("code")
+            message = detail.get("message") or detail.get("error")
+            if code and message:
+                return f"{code}: {message}"
+            if message:
+                return str(message)
+            if code:
+                return str(code)
+        if isinstance(detail, str):
+            return detail
+        error = payload.get("error")
+        if error is not None:
+            return str(error)
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    text = getattr(response, "text", "")
+    return str(text)
+
+
+def _result_from_exception(
+    *,
+    request_id: str,
+    exc: BaseException,
+    request_wall_s: float,
+) -> dict[str, Any]:
+    message = str(exc) or exc.__class__.__name__
+    return {
+        "id": request_id,
+        "status_code": None,
+        "success": False,
+        "request_wall_s": request_wall_s,
+        "error": f"{exc.__class__.__name__}: {message}",
+    }
+
+
 def _result_from_response(
     *,
     request_id: str,
@@ -272,13 +318,16 @@ def _result_from_response(
     row: dict[str, Any] = {
         "id": request_id,
         "status_code": response.status_code,
+        "success": False,
         "request_wall_s": request_wall_s,
     }
     if response.status_code != 200:
-        row["error"] = getattr(response, "text", "")
+        row["error"] = _response_error_message(response)
         return row
 
     headers = {key.lower(): value for key, value in response.headers.items()}
+    content = getattr(response, "content", b"")
+    audio_s = _audio_seconds_from_wav(content)
     row.update(
         {
             "batch_size": int(headers.get("x-omnivoice-batch-size", "0")),
@@ -310,12 +359,23 @@ def _result_from_response(
                 "x-omnivoice-generation-profile",
             ),
             "server_total_s": _float_header(headers, "x-omnivoice-total-s"),
-            "audio_s": _audio_seconds_from_wav(response.content),
-            "bytes": len(response.content),
+            "audio_s": audio_s,
+            "bytes": len(content),
         }
     )
+    if audio_s is None or audio_s <= 0.0:
+        row["error"] = "invalid_wav_response"
+        content_type = headers.get("content-type")
+        if content_type:
+            row["response_content_type"] = content_type
+        error_detail = _response_error_message(response)
+        if error_detail:
+            row["error_detail"] = error_detail
+        return row
+
+    row["success"] = True
     if wav_path is not None:
-        wav_path.write_bytes(response.content)
+        wav_path.write_bytes(content)
         row["wav"] = str(wav_path)
     return row
 
@@ -364,7 +424,15 @@ async def _run(args) -> dict[str, Any]:
             request_id = payload["request_id"]
             async with sem:
                 request_started = time.monotonic()
-                response = await client.post(args.url, json=payload)
+                try:
+                    response = await client.post(args.url, json=payload)
+                except Exception as exc:
+                    request_wall_s = time.monotonic() - request_started
+                    return _result_from_exception(
+                        request_id=request_id,
+                        exc=exc,
+                        request_wall_s=request_wall_s,
+                    )
                 request_wall_s = time.monotonic() - request_started
             wav_path = res_dir / f"{request_id}.wav" if args.save_wavs else None
             return _result_from_response(
@@ -380,11 +448,12 @@ async def _run(args) -> dict[str, Any]:
         wall_s = time.monotonic() - started
         scheduler_after = await _fetch_scheduler_snapshot(client, args.scheduler_url)
 
-    successful = [row for row in results if row.get("status_code") == 200]
+    successful = [row for row in results if row.get("success") is True]
     audio_s = sum(row["audio_s"] or 0.0 for row in successful)
     summary = {
         "num_requests": len(results),
         "num_successful": len(successful),
+        "num_failed": len(results) - len(successful),
         "wall_s": wall_s,
         "audio_s": audio_s,
         "rtf_wall": wall_s / audio_s if audio_s > 0 else None,
@@ -415,6 +484,7 @@ def main() -> None:
             {
                 "num_requests": summary["num_requests"],
                 "num_successful": summary["num_successful"],
+                "num_failed": summary["num_failed"],
                 "wall_s": summary["wall_s"],
                 "audio_s": summary["audio_s"],
                 "rtf_wall": summary["rtf_wall"],

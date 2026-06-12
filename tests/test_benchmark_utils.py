@@ -14,6 +14,7 @@ from omnivoice.cli.benchmark_http_batch import (
     _expand_samples_for_request_repeats,
     _pre_register_voices,
     _payload_from_sample,
+    _result_from_exception,
     _result_from_response,
     _sample_with_registered_voice_id,
     _voice_id_for_registration_key,
@@ -1815,6 +1816,7 @@ class BenchmarkUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(row["batch_size"], 4)
+        self.assertTrue(row["success"])
         self.assertEqual(row["queue_wait_ms"], 12.5)
         self.assertEqual(row["batch_infer_s"], 0.25)
         self.assertEqual(row["batch_reason"], "full")
@@ -1826,6 +1828,67 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(row["generation_profile"]["timings_s"]["total_s"], 1.0)
         self.assertAlmostEqual(row["audio_s"], 0.1)
         self.assertAlmostEqual(_audio_seconds_from_wav(buf.getvalue()), 0.1)
+
+    def test_http_result_extracts_structured_error_detail(self):
+        class FakeResponse:
+            status_code = 413
+            content = b""
+            text = '{"detail":{"code":"text_too_long","message":"too long"}}'
+            headers = {"content-type": "application/json"}
+
+            def json(self):
+                return {
+                    "detail": {
+                        "code": "text_too_long",
+                        "message": "too long",
+                    }
+                }
+
+        row = _result_from_response(
+            request_id="r1",
+            response=FakeResponse(),
+            request_wall_s=0.05,
+        )
+
+        self.assertFalse(row["success"])
+        self.assertEqual(row["status_code"], 413)
+        self.assertEqual(row["error"], "text_too_long: too long")
+
+    def test_http_result_rejects_200_with_invalid_wav(self):
+        class FakeResponse:
+            status_code = 200
+            content = b"not a wav"
+            text = "not a wav"
+            headers = {"content-type": "text/plain"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wav_path = Path(tmpdir) / "bad.wav"
+            row = _result_from_response(
+                request_id="r1",
+                response=FakeResponse(),
+                request_wall_s=0.05,
+                wav_path=wav_path,
+            )
+
+        self.assertFalse(row["success"])
+        self.assertEqual(row["status_code"], 200)
+        self.assertIsNone(row["audio_s"])
+        self.assertEqual(row["error"], "invalid_wav_response")
+        self.assertEqual(row["response_content_type"], "text/plain")
+        self.assertNotIn("wav", row)
+        self.assertFalse(wav_path.exists())
+
+    def test_http_result_records_request_exception(self):
+        row = _result_from_exception(
+            request_id="r1",
+            exc=TimeoutError("request timed out"),
+            request_wall_s=1.5,
+        )
+
+        self.assertFalse(row["success"])
+        self.assertIsNone(row["status_code"])
+        self.assertEqual(row["request_wall_s"], 1.5)
+        self.assertEqual(row["error"], "TimeoutError: request timed out")
 
 
 if __name__ == "__main__":
