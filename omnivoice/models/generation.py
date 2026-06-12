@@ -40,6 +40,9 @@ class OmniVoiceGenerationConfig:
             setattr(self, key, value)
         for field_name in STRICT_BOOL_CONFIG_FIELDS:
             setattr(self, field_name, ensure_bool(getattr(self, field_name), field_name))
+        self.split_guidance_forward = ensure_split_guidance_forward(
+            self.split_guidance_forward
+        )
 
     @classmethod
     def from_dict(cls, kwargs_dict):
@@ -82,6 +85,19 @@ STRICT_BOOL_CONFIG_FIELDS = (
     "enforce_output_duration",
 )
 
+SPLIT_GUIDANCE_FORCE_ON_VALUES = frozenset(
+    ("true", "1", "yes", "y", "on", "force", "forced")
+)
+SPLIT_GUIDANCE_FORCE_OFF_VALUES = frozenset(
+    ("false", "0", "no", "n", "off", "none")
+)
+SPLIT_GUIDANCE_AUTO_VALUES = frozenset(("auto", "adaptive"))
+SPLIT_GUIDANCE_STRING_VALUES = (
+    SPLIT_GUIDANCE_FORCE_ON_VALUES
+    | SPLIT_GUIDANCE_FORCE_OFF_VALUES
+    | SPLIT_GUIDANCE_AUTO_VALUES
+)
+
 
 def normalize_generation_mode(mode: str) -> str:
     normalized = str(mode).strip().lower().replace("-", "_")
@@ -108,6 +124,19 @@ def ensure_bool(value: bool, name: str) -> bool:
     if isinstance(value, (bool, np.bool_)):
         return bool(value)
     raise ValueError(f"{name} must be bool")
+
+
+def ensure_split_guidance_forward(value: Union[bool, str]) -> Union[bool, str]:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in SPLIT_GUIDANCE_STRING_VALUES:
+            return normalized
+    raise ValueError(
+        "split_guidance_forward must be true, false, or auto; "
+        f"got {value!r}"
+    )
 
 
 def ensure_optional_bool_list(

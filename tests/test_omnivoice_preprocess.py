@@ -85,6 +85,37 @@ class OmniVoicePreprocessTests(unittest.TestCase):
         self.assertFalse(config.reuse_static_input_embeds)
         self.assertFalse(config.split_guidance_forward)
 
+    def test_generation_config_validates_split_guidance_forward(self):
+        self.assertEqual(
+            OmniVoiceGenerationConfig(
+                split_guidance_forward="FALSE",
+            ).split_guidance_forward,
+            "false",
+        )
+        self.assertEqual(
+            OmniVoiceGenerationConfig(
+                split_guidance_forward="adaptive",
+            ).split_guidance_forward,
+            "adaptive",
+        )
+        self.assertTrue(
+            OmniVoiceGenerationConfig(split_guidance_forward=True).split_guidance_forward
+        )
+
+        with self.assertRaisesRegex(ValueError, "split_guidance_forward"):
+            OmniVoiceGenerationConfig(split_guidance_forward="maybe")
+
+        with self.assertRaisesRegex(ValueError, "split_guidance_forward"):
+            OmniVoiceGenerationConfig.from_dict({"split_guidance_forward": "maybe"})
+
+    def test_generation_mode_preset_overrides_split_guidance_before_validation(self):
+        config = OmniVoiceGenerationConfig(
+            generation_mode="official_compatible",
+            split_guidance_forward="maybe",
+        )
+
+        self.assertFalse(config.split_guidance_forward)
+
     def test_fit_audio_to_duration_pads_and_crops_last_axis(self):
         mono = np.arange(4, dtype=np.float32)
         padded = fit_audio_to_duration(mono, 0.006, sample_rate=1000)

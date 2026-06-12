@@ -71,6 +71,9 @@ from omnivoice.utils.audio import (
 )
 from omnivoice.models.generation import (
     OmniVoiceGenerationConfig,
+    SPLIT_GUIDANCE_AUTO_VALUES,
+    SPLIT_GUIDANCE_FORCE_OFF_VALUES,
+    SPLIT_GUIDANCE_FORCE_ON_VALUES,
     ensure_optional_bool_list as _ensure_optional_bool_list,
     fit_audio_to_duration,
     resolve_generation_config as _resolve_generation_config,
@@ -2259,11 +2262,11 @@ def _resolve_split_guidance_forward(
     else:
         normalized = mode
 
-    if normalized in (True, "true", "1", "yes", "y", "on", "force", "forced"):
+    if normalized is True or normalized in SPLIT_GUIDANCE_FORCE_ON_VALUES:
         return True, "forced_on"
-    if normalized in (False, "false", "0", "no", "n", "off", "none"):
+    if normalized is False or normalized in SPLIT_GUIDANCE_FORCE_OFF_VALUES:
         return False, "forced_off"
-    if normalized not in ("auto", "adaptive"):
+    if normalized not in SPLIT_GUIDANCE_AUTO_VALUES:
         raise ValueError(
             "split_guidance_forward must be true, false, or auto; "
             f"got {mode!r}"
