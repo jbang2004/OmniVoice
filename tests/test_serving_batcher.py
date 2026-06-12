@@ -280,6 +280,44 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(scheduler.snapshot().pending_total, 0)
 
+    async def test_submit_many_cancellation_removes_pending_requests(self):
+        scheduler = OmniVoiceBatchScheduler(
+            FakeModel(),
+            config=BatchSchedulerConfig(max_wait_ms=10_000.0),
+        )
+        task = asyncio.create_task(
+            scheduler.submit_many(
+                [
+                    OmniVoiceBatchRequest(request_id="a", text="A"),
+                    OmniVoiceBatchRequest(request_id="b", text="B"),
+                ]
+            )
+        )
+        await asyncio.sleep(0)
+
+        snapshot = scheduler.snapshot()
+        self.assertEqual(snapshot.pending_total, 2)
+        self.assertEqual(snapshot.pending_normal, 2)
+
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertEqual(scheduler.snapshot().pending_total, 0)
+
+    async def test_submit_and_control_reject_after_stop(self):
+        scheduler = OmniVoiceBatchScheduler(FakeModel())
+        await scheduler.stop()
+
+        with self.assertRaisesRegex(RuntimeError, "scheduler stopped"):
+            await scheduler.submit(OmniVoiceBatchRequest(request_id="x", text="x"))
+        with self.assertRaisesRegex(RuntimeError, "scheduler stopped"):
+            await scheduler.submit_many(
+                [OmniVoiceBatchRequest(request_id="y", text="y")]
+            )
+        with self.assertRaisesRegex(RuntimeError, "scheduler stopped"):
+            await scheduler._run_control(lambda: "ok")
+
     async def test_incompatible_modes_do_not_mix(self):
         model = FakeModel()
         scheduler = OmniVoiceBatchScheduler(
