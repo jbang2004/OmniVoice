@@ -35,7 +35,7 @@ import os
 import re
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from functools import partial
 from typing import Any, Iterator, List, Optional, Union
 
@@ -164,6 +164,7 @@ class _GenerationProfiler:
 
 @dataclass
 class OmniVoiceGenerationConfig:
+    generation_mode: str = "custom"
     num_step: int = 32
     guidance_scale: float = 2.0
     t_shift: float = 0.1
@@ -184,12 +185,85 @@ class OmniVoiceGenerationConfig:
     split_guidance_min_batch_size: int = 8
     split_guidance_min_saved_context_ratio: float = 0.25
     reuse_static_input_embeds: bool = True
+    enforce_output_duration: bool = False
+
+    def __post_init__(self):
+        mode = _normalize_generation_mode(self.generation_mode)
+        self.generation_mode = mode
+        for key, value in _GENERATION_MODE_PRESETS[mode].items():
+            setattr(self, key, value)
 
     @classmethod
     def from_dict(cls, kwargs_dict):
         valid_keys = {f.name for f in fields(cls)}
         filtered = {k: v for k, v in kwargs_dict.items() if k in valid_keys}
         return cls(**filtered)
+
+
+_GENERATION_MODE_PRESETS: dict[str, dict[str, Any]] = {
+    "custom": {},
+    "official_compatible": {
+        "batched_decode": False,
+        "batch_size_pad": None,
+        "seq_len_bucket_multiple": 1,
+        "target_len_bucket_multiple": 1,
+        "split_guidance_forward": False,
+        "reuse_static_input_embeds": False,
+    },
+    "optimized": {
+        "batched_decode": True,
+        "reuse_static_input_embeds": True,
+        "split_guidance_forward": "auto",
+    },
+}
+
+_GENERATION_MODE_ALIASES = {
+    "official": "official_compatible",
+    "compat": "official_compatible",
+    "compatible": "official_compatible",
+    "throughput": "optimized",
+}
+
+
+def _normalize_generation_mode(mode: str) -> str:
+    normalized = str(mode).strip().lower().replace("-", "_")
+    normalized = _GENERATION_MODE_ALIASES.get(normalized, normalized)
+    if normalized not in _GENERATION_MODE_PRESETS:
+        choices = ", ".join(sorted(_GENERATION_MODE_PRESETS))
+        raise ValueError(
+            f"Unknown generation_mode {mode!r}. Expected one of: {choices}."
+        )
+    return normalized
+
+
+def _resolve_generation_config(
+    config: OmniVoiceGenerationConfig,
+) -> OmniVoiceGenerationConfig:
+    mode = _normalize_generation_mode(config.generation_mode)
+    preset = _GENERATION_MODE_PRESETS[mode]
+    if not preset and config.generation_mode == mode:
+        return config
+    return replace(config, generation_mode=mode, **preset)
+
+
+def _fit_audio_to_duration(
+    audio: np.ndarray,
+    target_duration_s: Optional[float],
+    sample_rate: int,
+) -> np.ndarray:
+    if target_duration_s is None:
+        return audio
+    target_samples = max(1, int(round(float(target_duration_s) * sample_rate)))
+    current_samples = int(audio.shape[-1])
+    if current_samples == target_samples:
+        return audio
+    if current_samples > target_samples:
+        return audio[..., :target_samples].copy()
+
+    pad_shape = list(audio.shape)
+    pad_shape[-1] = target_samples - current_samples
+    padding = np.zeros(pad_shape, dtype=audio.dtype)
+    return np.concatenate([audio, padding], axis=-1)
 
 
 def _ref_audio_tuple_cache_marker(ref_audio: Any) -> Optional[tuple[Any, ...]]:
@@ -254,6 +328,7 @@ class GenerationTask:
     ref_audio_tokens: List[Optional[torch.Tensor]]
     ref_rms: List[Optional[float]]
     speed: Optional[List[float]] = None
+    requested_durations: Optional[List[Optional[float]]] = None
 
     def get_indices(self, config: OmniVoiceGenerationConfig, frame_rate: int):
         threshold = int(config.audio_chunk_threshold * frame_rate)
@@ -274,6 +349,11 @@ class GenerationTask:
             ref_audio_tokens=[self.ref_audio_tokens[i] for i in indices],
             ref_rms=[self.ref_rms[i] for i in indices],
             speed=[self.speed[i] for i in indices] if self.speed else None,
+            requested_durations=(
+                [self.requested_durations[i] for i in indices]
+                if self.requested_durations
+                else None
+            ),
         )
 
 
@@ -833,6 +913,10 @@ class OmniVoice(PreTrainedModel):
             generation_config: Explicit config object. If provided, takes
                 precedence over ``**kwargs``.
             **kwargs: Generation config or its fields:
+                generation_mode: ``"custom"`` (honor low-level flags),
+                    ``"official_compatible"`` (pin the original per-item
+                    decode/static-embedding behavior), or ``"optimized"``
+                    (use the recommended throughput defaults).
                 denoise: Whether to prepend the ``<|denoise|>`` token.
                 num_step: Number of iterative decoding steps.
                 guidance_scale: Classifier-free guidance scale.
@@ -850,6 +934,9 @@ class OmniVoice(PreTrainedModel):
                     in one tokenizer call. This improves throughput but can
                     introduce tiny floating-point differences versus per-item
                     decode, so it is opt-in for the base ``generate`` API.
+                enforce_output_duration: If ``duration`` is provided, crop or
+                    right-pad the final waveform after post-processing so the
+                    returned audio length matches the requested duration.
         Returns:
             ``audios`` a list of 1-D ``np.ndarray`` with shape ``(T,)`` and
             sampling rate consistent with the model's audio tokenizer
@@ -863,7 +950,7 @@ class OmniVoice(PreTrainedModel):
                 "loaded the model with OmniVoice.from_pretrained()."
             )
         gen_config = (
-            generation_config
+            _resolve_generation_config(generation_config)
             if generation_config is not None
             else OmniVoiceGenerationConfig.from_dict(kwargs)
         )
@@ -892,10 +979,14 @@ class OmniVoice(PreTrainedModel):
                 {
                     "batch_size": full_task.batch_size,
                     "target_lens": list(full_task.target_lens),
+                    "requested_durations": list(full_task.requested_durations or []),
                     "total_target_tokens": int(sum(full_task.target_lens)),
                     "max_target_tokens": int(max(full_task.target_lens, default=0)),
+                    "generation_mode": gen_config.generation_mode,
                     "num_step": gen_config.num_step,
                     "batched_decode": gen_config.batched_decode,
+                    "reuse_static_input_embeds": gen_config.reuse_static_input_embeds,
+                    "enforce_output_duration": gen_config.enforce_output_duration,
                     "postprocess_output": gen_config.postprocess_output,
                 }
             )
@@ -948,6 +1039,15 @@ class OmniVoice(PreTrainedModel):
                                 profile=profile,
                             )
                         )
+
+                if gen_config.enforce_output_duration:
+                    generated_audios = [
+                        _fit_audio_to_duration(audio, target_duration_s, self.sampling_rate)
+                        for audio, target_duration_s in zip(
+                            generated_audios,
+                            full_task.requested_durations or [None] * full_task.batch_size,
+                        )
+                    ]
 
         self.last_generation_profile = profile.to_dict()
         return generated_audios
@@ -1503,6 +1603,7 @@ class OmniVoice(PreTrainedModel):
             ref_audio_tokens=ref_audio_tokens_list,
             ref_rms=ref_rms_list,
             speed=speed_list,
+            requested_durations=durations,
         )
 
     def _estimate_target_tokens(self, text, ref_text, num_ref_audio_tokens, speed=1.0):

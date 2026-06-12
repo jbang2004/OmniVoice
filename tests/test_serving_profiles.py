@@ -376,6 +376,7 @@ class ServingProfileTests(unittest.TestCase):
         self.assertEqual(command[command.index("--scheduler_profile") + 1], "burst24")
         self.assertEqual(command[command.index("--compile_llm") + 1], "true")
         self.assertEqual(command[command.index("--compile_mode") + 1], "default")
+        self.assertEqual(command[command.index("--generation_mode") + 1], "optimized")
         self.assertEqual(command[command.index("--split_guidance_forward") + 1], "auto")
         self.assertEqual(command[command.index("--split_guidance_min_batch_size") + 1], "8")
         self.assertEqual(
@@ -390,6 +391,7 @@ class ServingProfileTests(unittest.TestCase):
         runtime = recommended_runtime_config()
 
         self.assertEqual(runtime["num_step"], 32)
+        self.assertEqual(runtime["generation_mode"], "optimized")
         self.assertTrue(runtime["reuse_static_input_embeds"])
         self.assertTrue(runtime["batched_decode"])
         self.assertFalse(runtime["compile_audio_heads"])

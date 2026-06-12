@@ -71,6 +71,8 @@ def build_recommended_serve_command(
         _bool_cli(runtime["allow_reduce_overhead_worker"]),
         "--matmul_precision",
         str(runtime["matmul_precision"]),
+        "--generation_mode",
+        str(runtime["generation_mode"]),
         "--num_step",
         str(runtime["num_step"]),
         "--batched_decode",

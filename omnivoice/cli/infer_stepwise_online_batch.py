@@ -112,6 +112,16 @@ def get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--num_step", type=int, default=32)
+    parser.add_argument(
+        "--generation_mode",
+        choices=["custom", "official_compatible", "optimized"],
+        default="custom",
+        help=(
+            "High-level generation preset. custom honors the low-level flags; "
+            "official_compatible pins decode/embedding behavior to the original "
+            "path; optimized enables the recommended throughput settings."
+        ),
+    )
     parser.add_argument("--guidance_scale", type=float, default=2.0)
     parser.add_argument("--t_shift", type=float, default=0.1)
     parser.add_argument("--denoise", type=str2bool, default=True)
@@ -122,6 +132,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--class_temperature", type=float, default=0.0)
     parser.add_argument("--audio_chunk_duration", type=float, default=15.0)
     parser.add_argument("--audio_chunk_threshold", type=float, default=30.0)
+    parser.add_argument("--enforce_output_duration", type=str2bool, default=False)
     parser.add_argument("--warmup", type=int, default=0)
     return parser
 
@@ -309,6 +320,7 @@ async def _run(args) -> dict[str, Any]:
             fullgraph=False,
         )
     generation_config = OmniVoiceGenerationConfig(
+        generation_mode=args.generation_mode,
         num_step=args.num_step,
         guidance_scale=args.guidance_scale,
         t_shift=args.t_shift,
@@ -320,6 +332,7 @@ async def _run(args) -> dict[str, Any]:
         class_temperature=args.class_temperature,
         audio_chunk_duration=args.audio_chunk_duration,
         audio_chunk_threshold=args.audio_chunk_threshold,
+        enforce_output_duration=args.enforce_output_duration,
     )
     samples = read_test_list(args.test_list)
     scheduler_config = StepwiseSchedulerConfig(

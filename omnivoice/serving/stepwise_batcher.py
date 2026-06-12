@@ -17,7 +17,10 @@ from typing import Any, Callable, Deque, Optional
 
 import torch
 
-from omnivoice.models.omnivoice import OmniVoiceGenerationConfig
+from omnivoice.models.omnivoice import (
+    OmniVoiceGenerationConfig,
+    _fit_audio_to_duration,
+)
 from omnivoice.serving.batcher import (
     OmniVoiceBatchRequest,
     OmniVoiceBatchResult,
@@ -90,6 +93,7 @@ class _RunningRequest:
     state: StepwiseGenerationState
     ref_rms: Optional[float]
     started_at: float
+    requested_duration: Optional[float] = None
     max_step_batch_size: int = 1
 
 
@@ -670,6 +674,9 @@ class StepwiseOmniVoiceScheduler:
             waiting=waiting,
             state=state,
             ref_rms=task.ref_rms[0],
+            requested_duration=task.requested_durations[0]
+            if task.requested_durations
+            else None,
             started_at=time.monotonic(),
         )
 
@@ -682,6 +689,12 @@ class StepwiseOmniVoiceScheduler:
                     item.ref_rms,
                     self.generation_config,
                 )
+                if self.generation_config.enforce_output_duration:
+                    audio = _fit_audio_to_duration(
+                        audio,
+                        item.requested_duration,
+                        self.sample_rate,
+                    )
             with self._metrics_lock:
                 self._decode_s += time.monotonic() - decode_start
             result = OmniVoiceBatchResult(

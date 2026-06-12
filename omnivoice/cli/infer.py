@@ -80,6 +80,17 @@ def get_parser() -> argparse.ArgumentParser:
         help="Language name (e.g. 'English') or code (e.g. 'en').",
     )
     # Generation parameters
+    parser.add_argument(
+        "--generation_mode",
+        choices=["custom", "official_compatible", "optimized"],
+        default="custom",
+        help=(
+            "High-level generation preset. custom honors the low-level flags; "
+            "official_compatible pins decode/embedding behavior to the original "
+            "single-item path; optimized enables the recommended throughput "
+            "settings."
+        ),
+    )
     parser.add_argument("--num_step", type=int, default=32)
     parser.add_argument("--guidance_scale", type=float, default=2.0)
     parser.add_argument("--speed", type=float, default=1.0)
@@ -97,6 +108,15 @@ def get_parser() -> argparse.ArgumentParser:
         "--postprocess_output",
         type=str2bool,
         default=True,
+    )
+    parser.add_argument(
+        "--enforce_output_duration",
+        type=str2bool,
+        default=False,
+        help=(
+            "If duration is provided, crop or right-pad the final waveform after "
+            "post-processing so the saved WAV matches the requested duration."
+        ),
     )
     parser.add_argument("--layer_penalty_factor", type=float, default=5.0)
     parser.add_argument("--position_temperature", type=float, default=5.0)
@@ -130,12 +150,14 @@ def main():
         ref_text=args.ref_text,
         instruct=args.instruct,
         duration=args.duration,
+        generation_mode=args.generation_mode,
         num_step=args.num_step,
         guidance_scale=args.guidance_scale,
         speed=args.speed,
         t_shift=args.t_shift,
         denoise=args.denoise,
         postprocess_output=args.postprocess_output,
+        enforce_output_duration=args.enforce_output_duration,
         layer_penalty_factor=args.layer_penalty_factor,
         position_temperature=args.position_temperature,
         class_temperature=args.class_temperature,

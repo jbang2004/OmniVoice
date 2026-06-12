@@ -285,6 +285,7 @@ def recommended_runtime_config() -> dict[str, Any]:
         "compile_audio_heads": False,
         "allow_reduce_overhead_worker": False,
         "matmul_precision": "high",
+        "generation_mode": "optimized",
         "num_step": 32,
         "batched_decode": True,
         "reuse_static_input_embeds": True,

@@ -102,6 +102,16 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max_seed_lookahead", type=int, default=32)
 
     parser.add_argument("--num_step", type=int, default=32)
+    parser.add_argument(
+        "--generation_mode",
+        choices=["custom", "official_compatible", "optimized"],
+        default="custom",
+        help=(
+            "High-level generation preset. custom honors the low-level flags; "
+            "official_compatible pins decode/embedding behavior to the original "
+            "path; optimized enables the recommended throughput settings."
+        ),
+    )
     parser.add_argument("--guidance_scale", type=float, default=2.0)
     parser.add_argument("--t_shift", type=float, default=0.1)
     parser.add_argument("--denoise", type=str2bool, default=True)
@@ -113,6 +123,15 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audio_chunk_duration", type=float, default=15.0)
     parser.add_argument("--audio_chunk_threshold", type=float, default=30.0)
     parser.add_argument("--batched_decode", type=str2bool, default=True)
+    parser.add_argument(
+        "--enforce_output_duration",
+        type=str2bool,
+        default=False,
+        help=(
+            "When samples provide duration, crop or right-pad the final waveform "
+            "after post-processing so saved WAVs match the requested duration."
+        ),
+    )
     parser.add_argument("--batch_size_pad", type=int, default=None)
     parser.add_argument("--seq_len_bucket_multiple", type=int, default=1)
     parser.add_argument("--target_len_bucket_multiple", type=int, default=1)
@@ -444,6 +463,7 @@ async def _run(args) -> dict[str, Any]:
         )
 
     generation_kwargs = {
+        "generation_mode": args.generation_mode,
         "num_step": args.num_step,
         "guidance_scale": args.guidance_scale,
         "t_shift": args.t_shift,
@@ -456,6 +476,7 @@ async def _run(args) -> dict[str, Any]:
         "audio_chunk_duration": args.audio_chunk_duration,
         "audio_chunk_threshold": args.audio_chunk_threshold,
         "batched_decode": args.batched_decode,
+        "enforce_output_duration": args.enforce_output_duration,
         "batch_size_pad": args.batch_size_pad,
         "seq_len_bucket_multiple": args.seq_len_bucket_multiple,
         "target_len_bucket_multiple": args.target_len_bucket_multiple,

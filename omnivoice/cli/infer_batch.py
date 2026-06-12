@@ -162,6 +162,25 @@ def get_parser():
         help="Whether to post-process generated audio (remove silence).",
     )
     parser.add_argument(
+        "--generation_mode",
+        choices=["custom", "official_compatible", "optimized"],
+        default="custom",
+        help=(
+            "High-level generation preset. custom honors the low-level flags; "
+            "official_compatible pins decode/embedding behavior to the original "
+            "path; optimized enables the recommended throughput settings."
+        ),
+    )
+    parser.add_argument(
+        "--enforce_output_duration",
+        type=str2bool,
+        default=False,
+        help=(
+            "If a sample has duration, crop or right-pad the final waveform "
+            "after post-processing so the saved WAV matches it exactly."
+        ),
+    )
+    parser.add_argument(
         "--layer_penalty_factor",
         type=float,
         default=5.0,

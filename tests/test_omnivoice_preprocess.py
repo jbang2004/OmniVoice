@@ -9,6 +9,7 @@ from omnivoice.models.omnivoice import (
     OmniVoice,
     OmniVoiceGenerationConfig,
     VoiceClonePrompt,
+    _fit_audio_to_duration,
 )
 
 
@@ -22,6 +23,61 @@ def _bare_model():
 
 
 class OmniVoicePreprocessTests(unittest.TestCase):
+    def test_generation_mode_presets_are_applied(self):
+        official = OmniVoiceGenerationConfig(
+            generation_mode="official_compatible",
+            batched_decode=True,
+            reuse_static_input_embeds=True,
+            split_guidance_forward="auto",
+            seq_len_bucket_multiple=64,
+            target_len_bucket_multiple=32,
+        )
+
+        self.assertEqual(official.generation_mode, "official_compatible")
+        self.assertFalse(official.batched_decode)
+        self.assertFalse(official.reuse_static_input_embeds)
+        self.assertFalse(official.split_guidance_forward)
+        self.assertEqual(official.seq_len_bucket_multiple, 1)
+        self.assertEqual(official.target_len_bucket_multiple, 1)
+
+        optimized = OmniVoiceGenerationConfig(generation_mode="throughput")
+
+        self.assertEqual(optimized.generation_mode, "optimized")
+        self.assertTrue(optimized.batched_decode)
+        self.assertTrue(optimized.reuse_static_input_embeds)
+        self.assertEqual(optimized.split_guidance_forward, "auto")
+
+    def test_generation_mode_rejects_unknown_values(self):
+        with self.assertRaisesRegex(ValueError, "Unknown generation_mode"):
+            OmniVoiceGenerationConfig(generation_mode="mystery")
+
+    def test_fit_audio_to_duration_pads_and_crops_last_axis(self):
+        mono = np.arange(4, dtype=np.float32)
+        padded = _fit_audio_to_duration(mono, 0.006, sample_rate=1000)
+        np.testing.assert_allclose(padded, np.array([0, 1, 2, 3, 0, 0], dtype=np.float32))
+
+        stereo = np.arange(12, dtype=np.float32).reshape(2, 6)
+        cropped = _fit_audio_to_duration(stereo, 0.004, sample_rate=1000)
+        self.assertEqual(cropped.shape, (2, 4))
+        np.testing.assert_allclose(cropped, stereo[:, :4])
+
+    def test_preprocess_records_requested_durations_for_final_enforcement(self):
+        model = _bare_model()
+
+        task = model._preprocess_all(
+            text=["first", "second"],
+            duration=[2.0, None],
+            speed=[1.0, 1.5],
+        )
+
+        self.assertEqual(task.target_lens, [50, 16])
+        self.assertEqual(task.requested_durations, [2.0, None])
+        self.assertEqual(task.speed, [16 / 50, 1.5])
+
+        sliced = task.slice_task([1])
+        self.assertIsNotNone(sliced)
+        self.assertEqual(sliced.requested_durations, [None])
+
     def test_ref_text_none_expands_for_multiple_ref_audios(self):
         model = _bare_model()
         calls = []

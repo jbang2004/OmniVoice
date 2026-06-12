@@ -737,6 +737,7 @@ class BenchmarkUtilsTests(unittest.TestCase):
             max_total_context_tokens=5000,
             max_context_ratio=1.6,
             max_context_padding_ratio=1.7,
+            generation_mode="optimized",
             guidance_scale=2.0,
             t_shift=0.1,
             denoise=True,
@@ -748,6 +749,7 @@ class BenchmarkUtilsTests(unittest.TestCase):
             audio_chunk_duration=15.0,
             audio_chunk_threshold=30.0,
             batched_decode=True,
+            enforce_output_duration=True,
             batch_size_pad=16,
             seq_len_bucket_multiple=64,
             target_len_bucket_multiple=32,
@@ -834,11 +836,13 @@ class BenchmarkUtilsTests(unittest.TestCase):
             command[command.index("--max_context_padding_ratio") + 1],
             "1.9",
         )
+        self.assertEqual(command[command.index("--generation_mode") + 1], "optimized")
         self.assertEqual(command[command.index("--num_step") + 1], "2")
         self.assertEqual(command[command.index("--batch_size_pad") + 1], "16")
         self.assertEqual(command[command.index("--seq_len_bucket_multiple") + 1], "64")
         self.assertEqual(command[command.index("--target_len_bucket_multiple") + 1], "32")
         self.assertEqual(command[command.index("--collect_profile") + 1], "true")
+        self.assertEqual(command[command.index("--enforce_output_duration") + 1], "true")
         self.assertEqual(command[command.index("--reuse_static_input_embeds") + 1], "true")
         self.assertEqual(command[command.index("--split_guidance_forward") + 1], "auto")
         self.assertEqual(command[command.index("--split_guidance_min_batch_size") + 1], "8")
