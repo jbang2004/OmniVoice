@@ -91,7 +91,9 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max_context_ratio", type=float, default=2.0)
     parser.add_argument("--max_context_padding_ratio", type=float, default=2.0)
     parser.add_argument("--ready_queue_capacity", type=int, default=64)
+    parser.add_argument("--control_queue_capacity", type=int, default=16)
     parser.add_argument("--prompt_cache_entries", type=int, default=128)
+    parser.add_argument("--use_model_duration_estimator", type=str2bool, default=True)
     parser.add_argument("--lookahead_for_full_batch", type=str2bool, default=True)
     parser.add_argument("--lookahead_for_partial_batch", type=str2bool, default=True)
     parser.add_argument(
@@ -100,6 +102,20 @@ def get_parser() -> argparse.ArgumentParser:
         default=2.0,
     )
     parser.add_argument("--max_seed_lookahead", type=int, default=32)
+    parser.add_argument(
+        "--candidate_pack_policy",
+        choices=["target", "context", "target_context"],
+        default="target_context",
+        help=(
+            "Candidate ordering policy for lookahead packing. Use the same "
+            "value as omnivoice-serve-online-batch when comparing benchmark "
+            "and HTTP serving behavior."
+        ),
+    )
+    parser.add_argument("--split_retry_on_memory_error", type=str2bool, default=True)
+    parser.add_argument("--adaptive_memory_batch_cap", type=str2bool, default=True)
+    parser.add_argument("--adaptive_memory_cap_recovery_successes", type=int, default=64)
+    parser.add_argument("--max_generation_batches_before_control", type=int, default=8)
 
     parser.add_argument("--num_step", type=int, default=32)
     parser.add_argument(
@@ -167,6 +183,38 @@ def _effective_compile_mode(args) -> str:
         )
         return "default"
     return args.compile_mode
+
+
+def _scheduler_config_from_args(args) -> BatchSchedulerConfig:
+    return BatchSchedulerConfig(
+        max_batch_size=args.batch_size,
+        max_wait_ms=args.max_wait_ms,
+        partial_batch_floor=args.partial_batch_floor,
+        max_total_target_tokens=args.max_total_target_tokens,
+        max_total_context_tokens=args.max_total_context_tokens,
+        max_cost_ratio=args.max_cost_ratio,
+        max_context_ratio=args.max_context_ratio,
+        max_context_padding_ratio=args.max_context_padding_ratio,
+        ready_queue_capacity=args.ready_queue_capacity,
+        control_queue_capacity=args.control_queue_capacity,
+        prompt_cache_entries=args.prompt_cache_entries,
+        use_model_duration_estimator=args.use_model_duration_estimator,
+        lookahead_for_full_batch=args.lookahead_for_full_batch,
+        lookahead_for_partial_batch=args.lookahead_for_partial_batch,
+        partial_lookahead_max_wait_multiplier=(
+            args.partial_lookahead_max_wait_multiplier
+        ),
+        max_seed_lookahead=args.max_seed_lookahead,
+        candidate_pack_policy=args.candidate_pack_policy,
+        split_retry_on_memory_error=args.split_retry_on_memory_error,
+        adaptive_memory_batch_cap=args.adaptive_memory_batch_cap,
+        adaptive_memory_cap_recovery_successes=(
+            args.adaptive_memory_cap_recovery_successes
+        ),
+        max_generation_batches_before_control=(
+            args.max_generation_batches_before_control
+        ),
+    )
 
 
 def _request_from_sample(sample: dict[str, Any]) -> OmniVoiceBatchRequest:
@@ -489,24 +537,7 @@ async def _run(args) -> dict[str, Any]:
         ),
     }
     samples = read_test_list(args.test_list)
-    scheduler_config = BatchSchedulerConfig(
-        max_batch_size=args.batch_size,
-        max_wait_ms=args.max_wait_ms,
-        partial_batch_floor=args.partial_batch_floor,
-        max_total_target_tokens=args.max_total_target_tokens,
-        max_total_context_tokens=args.max_total_context_tokens,
-        max_cost_ratio=args.max_cost_ratio,
-        max_context_ratio=args.max_context_ratio,
-        max_context_padding_ratio=args.max_context_padding_ratio,
-        ready_queue_capacity=args.ready_queue_capacity,
-        prompt_cache_entries=args.prompt_cache_entries,
-        lookahead_for_full_batch=args.lookahead_for_full_batch,
-        lookahead_for_partial_batch=args.lookahead_for_partial_batch,
-        partial_lookahead_max_wait_multiplier=(
-            args.partial_lookahead_max_wait_multiplier
-        ),
-        max_seed_lookahead=args.max_seed_lookahead,
-    )
+    scheduler_config = _scheduler_config_from_args(args)
     scheduler = OmniVoiceBatchScheduler(
         model,
         config=scheduler_config,

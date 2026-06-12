@@ -51,6 +51,7 @@ from omnivoice.cli.infer_online_batch import (
     _effective_compile_mode as _online_effective_compile_mode,
     _request_from_sample as _online_request_from_sample,
     _run_scheduler_warmup,
+    _scheduler_config_from_args as _online_scheduler_config_from_args,
     _select_representative_warmup_batches,
     _select_representative_warmup_samples,
     get_parser as get_online_parser,
@@ -1199,6 +1200,79 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(custom.split_guidance_forward, "false")
         self.assertEqual(custom.split_guidance_min_batch_size, 4)
         self.assertEqual(custom.split_guidance_min_saved_context_ratio, 0.5)
+
+    def test_online_parser_exposes_full_scheduler_config_surface(self):
+        args = get_online_parser().parse_args(
+            [
+                "--test_list",
+                "/tmp/test.jsonl",
+                "--res_dir",
+                "/tmp/results",
+                "--batch_size",
+                "12",
+                "--max_wait_ms",
+                "20",
+                "--max_total_target_tokens",
+                "2048",
+                "--max_total_context_tokens",
+                "4096",
+                "--max_cost_ratio",
+                "1.4",
+                "--max_context_ratio",
+                "1.8",
+                "--max_context_padding_ratio",
+                "1.6",
+                "--ready_queue_capacity",
+                "128",
+                "--control_queue_capacity",
+                "4",
+                "--prompt_cache_entries",
+                "256",
+                "--use_model_duration_estimator",
+                "false",
+                "--lookahead_for_full_batch",
+                "false",
+                "--lookahead_for_partial_batch",
+                "true",
+                "--partial_lookahead_max_wait_multiplier",
+                "3.0",
+                "--max_seed_lookahead",
+                "64",
+                "--candidate_pack_policy",
+                "context",
+                "--split_retry_on_memory_error",
+                "false",
+                "--adaptive_memory_batch_cap",
+                "false",
+                "--adaptive_memory_cap_recovery_successes",
+                "7",
+                "--max_generation_batches_before_control",
+                "3",
+            ]
+        )
+
+        config = _online_scheduler_config_from_args(args)
+
+        self.assertEqual(config.max_batch_size, 12)
+        self.assertEqual(config.max_wait_ms, 20.0)
+        self.assertEqual(config.max_total_target_tokens, 2048)
+        self.assertEqual(config.max_total_context_tokens, 4096)
+        self.assertEqual(config.max_cost_ratio, 1.4)
+        self.assertEqual(config.max_context_ratio, 1.8)
+        self.assertEqual(config.max_context_padding_ratio, 1.6)
+        self.assertEqual(config.ready_queue_capacity, 128)
+        self.assertEqual(config.control_queue_capacity, 4)
+        self.assertEqual(config.prompt_cache_entries, 256)
+        self.assertFalse(config.use_model_duration_estimator)
+        self.assertFalse(config.lookahead_for_full_batch)
+        self.assertTrue(config.lookahead_for_partial_batch)
+        self.assertEqual(config.partial_lookahead_max_wait_multiplier, 3.0)
+        self.assertEqual(config.max_seed_lookahead, 64)
+        self.assertEqual(config.candidate_pack_policy, "context")
+        self.assertFalse(config.split_retry_on_memory_error)
+        self.assertFalse(config.adaptive_memory_batch_cap)
+        self.assertEqual(config.adaptive_memory_cap_recovery_successes, 7)
+        self.assertEqual(config.max_generation_batches_before_control, 3)
 
     def test_stepwise_parser_exposes_context_admission_controls(self):
         args = get_stepwise_parser().parse_args(

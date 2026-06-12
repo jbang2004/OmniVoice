@@ -143,3 +143,10 @@ omnivoice-benchmark-server-sweep \
 The benchmark writes per-profile summaries and uses `/v1/scheduler` plus
 response headers to capture queue wait, batch size, token costs, and generation
 profile data.
+
+For a lighter in-process benchmark without HTTP, use
+`omnivoice-infer-online-batch`. It exposes the same core scheduler controls as
+`omnivoice-serve-online-batch`, including packing policy, model duration
+estimation, split retry, adaptive memory batch caps, and control-queue
+fairness. Keep those flags aligned when comparing CLI benchmark results with
+HTTP serving results.
