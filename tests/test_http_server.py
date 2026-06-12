@@ -18,6 +18,8 @@ class FakeScheduler:
         self.requests = []
         self.prompt_requests = []
         self.reset_metrics_calls = []
+        self.single_submit_count = 0
+        self.submit_many_count = 0
 
     async def start(self):
         self.started = True
@@ -26,7 +28,16 @@ class FakeScheduler:
         self.stopped = True
 
     async def submit(self, request):
+        self.single_submit_count += 1
         self.requests.append(request)
+        return self._result_for(request)
+
+    async def submit_many(self, requests):
+        self.submit_many_count += 1
+        self.requests.extend(requests)
+        return [self._result_for(request) for request in requests]
+
+    def _result_for(self, request):
         return type(
             "Result",
             (),
@@ -92,6 +103,9 @@ class FailingScheduler(FakeScheduler):
         self.exc = exc
 
     async def submit(self, request):
+        raise self.exc
+
+    async def submit_many(self, requests):
         raise self.exc
 
 
@@ -374,7 +388,12 @@ class HttpServerTests(unittest.TestCase):
             body["results"][0]["batch_context_padding_ratio"],
             1.25,
         )
-        self.assertEqual([request.request_id for request in scheduler.requests], ["a", "b"])
+        self.assertEqual(
+            [request.request_id for request in scheduler.requests],
+            ["a", "b"],
+        )
+        self.assertEqual(scheduler.single_submit_count, 0)
+        self.assertEqual(scheduler.submit_many_count, 1)
 
     def test_rejects_conflicting_voice_modes(self):
         scheduler = FakeScheduler()
@@ -399,6 +418,24 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.headers["retry-after"], "1")
         self.assertEqual(response.json()["detail"]["code"], "queue_full")
+
+    def test_batch_queue_full_maps_to_429_without_partial_submit(self):
+        scheduler = FailingScheduler(RuntimeError("OmniVoice scheduler queue is full"))
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/tts_batch",
+                json={
+                    "requests": [
+                        {"request_id": "a", "text": "A"},
+                        {"request_id": "b", "text": "B"},
+                    ]
+                },
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.headers["retry-after"], "1")
+        self.assertEqual(response.json()["detail"]["code"], "queue_full")
+        self.assertEqual(scheduler.requests, [])
 
     def test_voice_prompt_control_queue_full_maps_to_429(self):
         scheduler = FailingPromptScheduler(
@@ -450,6 +487,37 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"]["code"], "bad_request")
         self.assertIn("request_id", response.json()["detail"]["message"])
         self.assertEqual(scheduler.requests, [])
+
+    def test_rejects_blank_request_mode_fields(self):
+        cases = (
+            ("/v1/tts", {"text": "hello", "language_id": "   "}, "language_id"),
+            ("/v1/tts", {"text": "hello", "voice_id": "   "}, "voice_id"),
+            ("/v1/tts", {"text": "hello", "ref_audio": "   "}, "ref_audio"),
+            (
+                "/v1/tts",
+                {"text": "hello", "ref_audio_base64": "   "},
+                "ref_audio_base64",
+            ),
+            ("/v1/tts", {"text": "hello", "instruct": "   "}, "instruct"),
+            (
+                "/v1/voices",
+                {"voice_id": "   ", "ref_audio_base64": _wav_base64()},
+                "voice_id",
+            ),
+            ("/v1/voices", {"ref_audio": "   "}, "ref_audio"),
+        )
+
+        for path, payload, field_name in cases:
+            scheduler = FakeScheduler()
+            with self.subTest(path=path, field_name=field_name):
+                with self._client(scheduler) as client:
+                    response = client.post(path, json=payload)
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()["detail"]["code"], "bad_request")
+                self.assertIn(field_name, response.json()["detail"]["message"])
+                self.assertEqual(scheduler.requests, [])
+                self.assertEqual(scheduler.prompt_requests, [])
 
     def test_register_voice_prompt_and_use_voice_id(self):
         scheduler = FakeScheduler()

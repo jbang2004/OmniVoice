@@ -1,7 +1,6 @@
 """FastAPI app factory for online micro-batched OmniVoice serving."""
 
 import base64
-import asyncio
 import hashlib
 import io
 import json
@@ -220,12 +219,25 @@ def create_online_batch_app(
             },
         )
 
+    def reject_blank_optional(value: Optional[str], field_name: str) -> None:
+        if value is not None and not value.strip():
+            raise bad_request(f"{field_name} must be a non-empty string")
+
     def build_request(payload: TTSRequest) -> OmniVoiceBatchRequest:
         if len(payload.text) > state.max_request_text_chars:
             raise HTTPException(
                 status_code=413,
                 detail=f"text exceeds {state.max_request_text_chars} characters",
             )
+        for field_name in (
+            "language",
+            "language_id",
+            "voice_id",
+            "ref_audio",
+            "ref_audio_base64",
+            "instruct",
+        ):
+            reject_blank_optional(getattr(payload, field_name), field_name)
         if payload.ref_audio and payload.ref_audio_base64:
             raise bad_request(
                 "Provide only one of ref_audio or ref_audio_base64"
@@ -289,7 +301,12 @@ def create_online_batch_app(
         except ValueError as exc:
             raise bad_request(str(exc)) from exc
 
-    def build_voice_prompt_audio(payload: VoicePromptRequest) -> tuple[Any, Optional[tuple[Any, ...]]]:
+    def build_voice_prompt_audio(
+        payload: VoicePromptRequest,
+    ) -> tuple[Any, Optional[tuple[Any, ...]]]:
+        reject_blank_optional(payload.voice_id, "voice_id")
+        reject_blank_optional(payload.ref_audio, "ref_audio")
+        reject_blank_optional(payload.ref_audio_base64, "ref_audio_base64")
         if payload.ref_audio and payload.ref_audio_base64:
             raise bad_request(
                 "Provide only one of ref_audio or ref_audio_base64"
@@ -467,7 +484,18 @@ def create_online_batch_app(
         return Response(content=audio, media_type="audio/wav", headers=headers)
 
     async def scheduler_submit_many(requests: list[OmniVoiceBatchRequest]):
-        return await asyncio.gather(*[submit_request(request) for request in requests])
+        try:
+            return await state.scheduler.submit_many(requests)
+        except RuntimeError as exc:
+            raise map_scheduler_runtime_error(exc) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "generation_failed",
+                    "message": str(exc) or "OmniVoice generation failed",
+                },
+            ) from exc
 
     @app.post("/v1/tts_batch")
     async def synthesize_batch(payload: TTSBatchRequest = Body(...)) -> dict[str, Any]:

@@ -49,6 +49,10 @@ omnivoice-serve-online-batch \
 | `/v1/voices` | GET | List the in-memory voice registry. |
 | `/v1/voices/{voice_id}` | DELETE | Delete a registered voice prompt. |
 
+`/v1/tts_batch` atomically enqueues the submitted list: if the scheduler queue
+does not have enough capacity for every item, the endpoint returns `429` and no
+item from that HTTP request is submitted for generation.
+
 ## Voice Registration
 
 Register a reference voice once, then reuse its `voice_id` in later requests.

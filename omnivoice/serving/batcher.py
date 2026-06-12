@@ -467,20 +467,7 @@ class OmniVoiceBatchScheduler:
 
     async def submit(self, request: OmniVoiceBatchRequest) -> OmniVoiceBatchResult:
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[OmniVoiceBatchResult] = loop.create_future()
-        cost_tokens = self._estimate_cost_tokens(request)
-        queued = _QueuedRequest(
-            request=request,
-            future=future,
-            loop=loop,
-            enqueued_at=time.monotonic(),
-            cost_tokens=cost_tokens,
-            context_tokens=self._estimate_context_tokens(
-                request,
-                cost_tokens=cost_tokens,
-            ),
-            mode=self._mode_key(request),
-        )
+        queued = self._build_queued_request(request, loop)
         with self._state:
             if self._stop.is_set():
                 raise RuntimeError("scheduler stopped")
@@ -492,12 +479,70 @@ class OmniVoiceBatchScheduler:
                 self._ready_normal.append(queued)
             self._state.notify()
         try:
-            return await future
+            return await queued.future
         except asyncio.CancelledError:
             with self._state:
                 if self._remove_queued_locked(queued):
                     self._state.notify_all()
             raise
+
+    async def submit_many(
+        self,
+        requests: Sequence[OmniVoiceBatchRequest],
+    ) -> list[OmniVoiceBatchResult]:
+        if not requests:
+            return []
+
+        loop = asyncio.get_running_loop()
+        queued_requests = [
+            self._build_queued_request(request, loop) for request in requests
+        ]
+        with self._state:
+            if self._stop.is_set():
+                raise RuntimeError("scheduler stopped")
+            if (
+                self._pending_total_locked() + len(queued_requests)
+                > self.config.ready_queue_capacity
+            ):
+                raise RuntimeError("OmniVoice scheduler queue is full")
+            for queued in queued_requests:
+                if queued.request.priority == "high":
+                    self._ready_high.append(queued)
+                else:
+                    self._ready_normal.append(queued)
+            self._state.notify_all()
+        try:
+            return await asyncio.gather(
+                *(queued.future for queued in queued_requests)
+            )
+        except asyncio.CancelledError:
+            with self._state:
+                removed = False
+                for queued in queued_requests:
+                    removed = self._remove_queued_locked(queued) or removed
+                if removed:
+                    self._state.notify_all()
+            raise
+
+    def _build_queued_request(
+        self,
+        request: OmniVoiceBatchRequest,
+        loop: asyncio.AbstractEventLoop,
+    ) -> _QueuedRequest:
+        future: asyncio.Future[OmniVoiceBatchResult] = loop.create_future()
+        cost_tokens = self._estimate_cost_tokens(request)
+        return _QueuedRequest(
+            request=request,
+            future=future,
+            loop=loop,
+            enqueued_at=time.monotonic(),
+            cost_tokens=cost_tokens,
+            context_tokens=self._estimate_context_tokens(
+                request,
+                cost_tokens=cost_tokens,
+            ),
+            mode=self._mode_key(request),
+        )
 
     async def create_voice_clone_prompt(
         self,

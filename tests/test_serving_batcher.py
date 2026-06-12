@@ -240,6 +240,46 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([len(call) for call in model.calls], [4])
         self.assertEqual([result.batch_size for result in results], [4, 4, 4, 4])
 
+    async def test_submit_many_dispatches_together(self):
+        model = FakeModel()
+        scheduler = OmniVoiceBatchScheduler(
+            model,
+            config=BatchSchedulerConfig(
+                max_batch_size=4,
+                max_wait_ms=10_000.0,
+                partial_batch_floor=2,
+            ),
+        )
+        await scheduler.start()
+        try:
+            results = await scheduler.submit_many(
+                [
+                    OmniVoiceBatchRequest(request_id=str(i), text=f"text {i}")
+                    for i in range(4)
+                ]
+            )
+        finally:
+            await scheduler.stop()
+
+        self.assertEqual([len(call) for call in model.calls], [4])
+        self.assertEqual([result.batch_size for result in results], [4, 4, 4, 4])
+
+    async def test_submit_many_queue_capacity_is_all_or_none(self):
+        scheduler = OmniVoiceBatchScheduler(
+            FakeModel(),
+            config=BatchSchedulerConfig(ready_queue_capacity=1),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "queue is full"):
+            await scheduler.submit_many(
+                [
+                    OmniVoiceBatchRequest(request_id="a", text="A"),
+                    OmniVoiceBatchRequest(request_id="b", text="B"),
+                ]
+            )
+
+        self.assertEqual(scheduler.snapshot().pending_total, 0)
+
     async def test_incompatible_modes_do_not_mix(self):
         model = FakeModel()
         scheduler = OmniVoiceBatchScheduler(
