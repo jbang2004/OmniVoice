@@ -50,7 +50,7 @@ import soundfile as sf
 
 from omnivoice.utils.audio import load_audio
 from omnivoice.utils.common import get_best_device_with_count, str2bool
-from omnivoice.utils.data_utils import read_test_list
+from omnivoice.utils.data_utils import read_test_list, require_sample_id
 from omnivoice.utils.duration import RuleDurationEstimator
 
 
@@ -392,9 +392,7 @@ def sample_tuple_from_test_list_row(
     *,
     lang_id_override: Optional[str] = None,
 ) -> Tuple:
-    save_name = sample.get("id") or sample.get("save_name")
-    if not save_name:
-        raise ValueError("Each test-list sample requires id or save_name")
+    save_name = require_sample_id(sample)
     lang_id = (
         lang_id_override
         if lang_id_override is not None

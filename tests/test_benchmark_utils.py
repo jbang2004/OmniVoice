@@ -1155,6 +1155,17 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(request.duration, 1.2)
         self.assertTrue(request.enforce_output_duration)
 
+        fallback = _online_request_from_sample(
+            {
+                "save_name": "saved-r2",
+                "text": "hello",
+            }
+        )
+        self.assertEqual(fallback.request_id, "saved-r2")
+
+        with self.assertRaisesRegex(ValueError, "id or save_name"):
+            _online_request_from_sample({"text": "hello"})
+
     def test_scheduler_aware_warmup_fill_respects_target_token_cap(self):
         samples = [
             {
@@ -1486,6 +1497,12 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(payload["priority"], "high")
         self.assertNotIn("instruct", payload)
 
+        fallback = _payload_from_sample({"save_name": "saved-r2", "text": "hello"})
+        self.assertEqual(fallback["request_id"], "saved-r2")
+
+        with self.assertRaisesRegex(ValueError, "id or save_name"):
+            _payload_from_sample({"text": "hello"})
+
     def test_voice_pre_registration_helpers_group_and_rewrite_samples(self):
         first = {
             "id": "r1",
@@ -1725,6 +1742,17 @@ class BenchmarkUtilsTests(unittest.TestCase):
 
         self.assertEqual(request.duration, 1.2)
         self.assertFalse(request.enforce_output_duration)
+
+        fallback = _stepwise_request_from_sample(
+            {
+                "save_name": "saved-r2",
+                "text": "hello",
+            }
+        )
+        self.assertEqual(fallback.request_id, "saved-r2")
+
+        with self.assertRaisesRegex(ValueError, "id or save_name"):
+            _stepwise_request_from_sample({"text": "hello"})
 
     def test_read_test_list_preserves_serving_fields(self):
         row = {

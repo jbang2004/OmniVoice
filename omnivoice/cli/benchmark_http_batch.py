@@ -17,7 +17,7 @@ import soundfile as sf
 from omnivoice.cli.benchmark_utils import summarize_request_results
 from omnivoice.models.generation import ensure_bool
 from omnivoice.utils.common import str2bool
-from omnivoice.utils.data_utils import read_test_list
+from omnivoice.utils.data_utils import read_test_list, require_sample_id
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -46,7 +46,7 @@ def get_parser() -> argparse.ArgumentParser:
 
 def _payload_from_sample(sample: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "request_id": str(sample.get("id") or sample.get("save_name")),
+        "request_id": require_sample_id(sample),
         "text": sample["text"],
     }
     for source_key, target_key in (

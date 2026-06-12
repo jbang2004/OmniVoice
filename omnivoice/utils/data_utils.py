@@ -26,6 +26,17 @@ import logging
 from pathlib import Path
 
 
+def require_sample_id(sample):
+    """Return a stable sample identifier or fail with a clear error."""
+    sample_id = sample.get("id")
+    if sample_id is not None and str(sample_id).strip():
+        return str(sample_id)
+    save_name = sample.get("save_name")
+    if save_name is not None and str(save_name).strip():
+        return str(save_name)
+    raise ValueError("Each test-list sample requires id or save_name")
+
+
 def read_test_list(path):
     """Read a JSONL test list file.
 

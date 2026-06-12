@@ -29,7 +29,7 @@ from omnivoice.serving import (
     OmniVoiceBatchScheduler,
 )
 from omnivoice.utils.common import get_best_device, str2bool
-from omnivoice.utils.data_utils import read_test_list
+from omnivoice.utils.data_utils import read_test_list, require_sample_id
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -219,7 +219,7 @@ def _scheduler_config_from_args(args) -> BatchSchedulerConfig:
 
 def _request_from_sample(sample: dict[str, Any]) -> OmniVoiceBatchRequest:
     return OmniVoiceBatchRequest(
-        request_id=str(sample.get("id") or sample.get("save_name")),
+        request_id=require_sample_id(sample),
         text=sample["text"],
         language=sample.get("language_id") or sample.get("language"),
         ref_audio=sample.get("ref_audio"),
