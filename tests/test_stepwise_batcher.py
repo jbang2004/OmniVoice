@@ -569,6 +569,69 @@ class StepwiseAdmissionTests(unittest.TestCase):
 
         self.loop.run_until_complete(run())
 
+    def test_submit_many_capacity_is_all_or_none(self):
+        async def run():
+            scheduler = StepwiseOmniVoiceScheduler(
+                model=None,
+                scheduler_config=StepwiseSchedulerConfig(ready_queue_capacity=1),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "queue is full"):
+                await scheduler.submit_many(
+                    [
+                        OmniVoiceBatchRequest(request_id="a", text="A"),
+                        OmniVoiceBatchRequest(request_id="b", text="B"),
+                    ]
+                )
+
+            self.assertEqual(list(scheduler._waiting), [])
+
+        self.loop.run_until_complete(run())
+
+    def test_submit_many_cancellation_removes_waiting_requests(self):
+        async def run():
+            scheduler = StepwiseOmniVoiceScheduler(
+                model=None,
+                scheduler_config=StepwiseSchedulerConfig(max_wait_ms=10000.0),
+            )
+            task = asyncio.create_task(
+                scheduler.submit_many(
+                    [
+                        OmniVoiceBatchRequest(request_id="a", text="A"),
+                        OmniVoiceBatchRequest(request_id="b", text="B"),
+                    ]
+                )
+            )
+            await asyncio.sleep(0)
+
+            self.assertEqual(
+                [item.request.request_id for item in scheduler._waiting],
+                ["a", "b"],
+            )
+
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertEqual(list(scheduler._waiting), [])
+
+        self.loop.run_until_complete(run())
+
+    def test_submit_and_control_reject_after_stop(self):
+        async def run():
+            scheduler = StepwiseOmniVoiceScheduler(model=None)
+            await scheduler.stop()
+
+            with self.assertRaisesRegex(RuntimeError, "scheduler stopped"):
+                await scheduler.submit(OmniVoiceBatchRequest(request_id="x", text="x"))
+            with self.assertRaisesRegex(RuntimeError, "scheduler stopped"):
+                await scheduler.submit_many(
+                    [OmniVoiceBatchRequest(request_id="y", text="y")]
+                )
+            with self.assertRaisesRegex(RuntimeError, "scheduler stopped"):
+                await scheduler._run_control(lambda: "ok")
+
+        self.loop.run_until_complete(run())
+
     def test_control_cancellation_removes_pending_control(self):
         async def run():
             scheduler = StepwiseOmniVoiceScheduler(

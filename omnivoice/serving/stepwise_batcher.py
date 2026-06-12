@@ -13,7 +13,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Optional
+from typing import Any, Callable, Deque, Optional, Sequence
 
 import torch
 
@@ -233,8 +233,63 @@ class StepwiseOmniVoiceScheduler:
 
     async def submit(self, request: OmniVoiceBatchRequest) -> OmniVoiceBatchResult:
         loop = asyncio.get_running_loop()
+        waiting = self._build_waiting_request(request, loop)
+        with self._state:
+            if self._stop.is_set():
+                raise RuntimeError("scheduler stopped")
+            if len(self._waiting) >= self.scheduler_config.ready_queue_capacity:
+                raise RuntimeError("OmniVoice stepwise scheduler queue is full")
+            self._waiting.append(waiting)
+            self._state.notify()
+        try:
+            return await waiting.future
+        except asyncio.CancelledError:
+            with self._state:
+                if self._remove_waiting_locked(waiting):
+                    self._state.notify_all()
+            raise
+
+    async def submit_many(
+        self,
+        requests: Sequence[OmniVoiceBatchRequest],
+    ) -> list[OmniVoiceBatchResult]:
+        if not requests:
+            return []
+
+        loop = asyncio.get_running_loop()
+        waiting_requests = [
+            self._build_waiting_request(request, loop) for request in requests
+        ]
+        with self._state:
+            if self._stop.is_set():
+                raise RuntimeError("scheduler stopped")
+            if (
+                len(self._waiting) + len(waiting_requests)
+                > self.scheduler_config.ready_queue_capacity
+            ):
+                raise RuntimeError("OmniVoice stepwise scheduler queue is full")
+            self._waiting.extend(waiting_requests)
+            self._state.notify_all()
+        try:
+            return await asyncio.gather(
+                *(waiting.future for waiting in waiting_requests)
+            )
+        except asyncio.CancelledError:
+            with self._state:
+                removed = False
+                for waiting in waiting_requests:
+                    removed = self._remove_waiting_locked(waiting) or removed
+                if removed:
+                    self._state.notify_all()
+            raise
+
+    def _build_waiting_request(
+        self,
+        request: OmniVoiceBatchRequest,
+        loop: asyncio.AbstractEventLoop,
+    ) -> _WaitingRequest:
         future: asyncio.Future[OmniVoiceBatchResult] = loop.create_future()
-        waiting = _WaitingRequest(
+        return _WaitingRequest(
             request=request,
             future=future,
             loop=loop,
@@ -242,17 +297,6 @@ class StepwiseOmniVoiceScheduler:
             estimated_target_tokens=self._estimate_target_tokens(request),
             estimated_context_tokens=self._estimate_context_tokens(request),
         )
-        with self._state:
-            if len(self._waiting) >= self.scheduler_config.ready_queue_capacity:
-                raise RuntimeError("OmniVoice stepwise scheduler queue is full")
-            self._waiting.append(waiting)
-            self._state.notify()
-        try:
-            return await future
-        except asyncio.CancelledError:
-            with self._state:
-                self._remove_waiting_locked(waiting)
-            raise
 
     async def create_voice_clone_prompt(
         self,
@@ -281,6 +325,8 @@ class StepwiseOmniVoiceScheduler:
         future: asyncio.Future[Any] = loop.create_future()
         control = _ControlRequest(func=func, future=future, loop=loop)
         with self._state:
+            if self._stop.is_set():
+                raise RuntimeError("scheduler stopped")
             if len(self._control) >= self.scheduler_config.control_queue_capacity:
                 raise RuntimeError("OmniVoice stepwise scheduler control queue is full")
             self._control.append(control)
