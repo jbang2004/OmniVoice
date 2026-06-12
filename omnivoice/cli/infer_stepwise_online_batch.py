@@ -15,7 +15,11 @@ from typing import Any
 import soundfile as sf
 import torch
 
-from omnivoice.cli.benchmark_utils import summarize_request_results
+from omnivoice.cli.benchmark_utils import (
+    request_exception_result,
+    successful_request_results,
+    summarize_request_results,
+)
 from omnivoice.models.generation import OmniVoiceGenerationConfig
 from omnivoice.models.omnivoice import OmniVoice
 from omnivoice.serving.batcher import OmniVoiceBatchRequest
@@ -423,18 +427,31 @@ async def _run(args) -> dict[str, Any]:
         if args.arrival_gap_ms > 0:
             await asyncio.sleep(index * args.arrival_gap_ms / 1000.0)
         async with sem:
-            req = _request_from_sample(sample)
-            result = await scheduler.submit(req)
-            out_path = Path(args.res_dir) / f"{req.request_id}.wav"
-            sf.write(out_path, result.audio, result.sample_rate)
-            return {
-                "id": req.request_id,
-                "wav": str(out_path),
-                "audio_s": len(result.audio) / result.sample_rate,
-                "max_step_batch_size": result.batch_size,
-                "queue_wait_ms": result.queue_wait_ms,
-                "infer_s": result.batch_infer_s,
-            }
+            request_id = require_sample_id(sample)
+            request_started = time.monotonic()
+            try:
+                req = _request_from_sample(sample)
+                result = await scheduler.submit(req)
+                audio_s = len(result.audio) / result.sample_rate
+                if audio_s <= 0.0:
+                    raise ValueError("invalid_audio_result")
+                out_path = Path(args.res_dir) / f"{req.request_id}.wav"
+                sf.write(out_path, result.audio, result.sample_rate)
+                return {
+                    "id": req.request_id,
+                    "success": True,
+                    "wav": str(out_path),
+                    "audio_s": audio_s,
+                    "max_step_batch_size": result.batch_size,
+                    "queue_wait_ms": result.queue_wait_ms,
+                    "infer_s": result.batch_infer_s,
+                }
+            except Exception as exc:
+                return request_exception_result(
+                    request_id=request_id,
+                    exc=exc,
+                    request_wall_s=time.monotonic() - request_started,
+                )
 
     try:
         results = await asyncio.gather(
@@ -444,16 +461,19 @@ async def _run(args) -> dict[str, Any]:
         await scheduler.stop()
 
     wall_s = time.monotonic() - started
-    audio_s = sum(item["audio_s"] for item in results)
+    successful = successful_request_results(results)
+    audio_s = sum(item["audio_s"] for item in successful)
     summary = {
         "num_requests": len(results),
+        "num_successful": len(successful),
+        "num_failed": len(results) - len(successful),
         "wall_s": wall_s,
         "audio_s": audio_s,
         "rtf_wall": wall_s / audio_s if audio_s > 0 else None,
         "voice_registration": voice_registration,
         "scheduler": scheduler.snapshot().__dict__,
         "request_metrics": summarize_request_results(
-            results,
+            successful,
             batch_size_key="max_step_batch_size",
             infer_s_key="infer_s",
             reason_key=None,
@@ -477,8 +497,13 @@ def main() -> None:
     args = get_parser().parse_args()
     summary = asyncio.run(_run(args))
     logging.info(
-        "Done: requests=%d wall=%.3fs audio=%.3fs avg_step_batch=%.2f summary=%s",
+        (
+            "Done: requests=%d successful=%d failed=%d wall=%.3fs "
+            "audio=%.3fs avg_step_batch=%.2f summary=%s"
+        ),
         summary["num_requests"],
+        summary["num_successful"],
+        summary["num_failed"],
         summary["wall_s"],
         summary["audio_s"],
         summary["scheduler"]["avg_step_batch_size"],

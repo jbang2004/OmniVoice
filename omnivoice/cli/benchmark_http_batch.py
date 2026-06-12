@@ -14,7 +14,11 @@ from typing import Any, Optional
 
 import soundfile as sf
 
-from omnivoice.cli.benchmark_utils import summarize_request_results
+from omnivoice.cli.benchmark_utils import (
+    request_exception_result,
+    successful_request_results,
+    summarize_request_results,
+)
 from omnivoice.models.generation import ensure_bool
 from omnivoice.utils.common import str2bool
 from omnivoice.utils.data_utils import read_test_list, require_sample_id
@@ -298,14 +302,12 @@ def _result_from_exception(
     exc: BaseException,
     request_wall_s: float,
 ) -> dict[str, Any]:
-    message = str(exc) or exc.__class__.__name__
-    return {
-        "id": request_id,
-        "status_code": None,
-        "success": False,
-        "request_wall_s": request_wall_s,
-        "error": f"{exc.__class__.__name__}: {message}",
-    }
+    return request_exception_result(
+        request_id=request_id,
+        exc=exc,
+        request_wall_s=request_wall_s,
+        status_code=None,
+    )
 
 
 def _result_from_response(
@@ -448,7 +450,7 @@ async def _run(args) -> dict[str, Any]:
         wall_s = time.monotonic() - started
         scheduler_after = await _fetch_scheduler_snapshot(client, args.scheduler_url)
 
-    successful = [row for row in results if row.get("success") is True]
+    successful = successful_request_results(results)
     audio_s = sum(row["audio_s"] or 0.0 for row in successful)
     summary = {
         "num_requests": len(results),

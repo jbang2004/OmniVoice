@@ -44,9 +44,11 @@ from omnivoice.cli.benchmark_utils import (
     parse_int_grid,
     rank_http_sweep_results,
     rank_server_sweep_results,
+    request_exception_result,
     recommend_server_sweep_config,
     summarize_best_server_sweep_result,
     summarize_best_http_sweep_result,
+    successful_request_results,
 )
 from omnivoice.cli.infer_online_batch import (
     _effective_compile_mode as _online_effective_compile_mode,
@@ -73,6 +75,30 @@ from omnivoice.utils.data_utils import read_test_list
 
 
 class BenchmarkUtilsTests(unittest.TestCase):
+    def test_request_exception_result_records_failure_row(self):
+        row = request_exception_result(
+            request_id="r1",
+            exc=TimeoutError("timed out"),
+            request_wall_s=1.25,
+            status_code=None,
+        )
+
+        self.assertEqual(row["id"], "r1")
+        self.assertFalse(row["success"])
+        self.assertIsNone(row["status_code"])
+        self.assertEqual(row["request_wall_s"], 1.25)
+        self.assertEqual(row["error"], "TimeoutError: timed out")
+
+    def test_successful_request_results_requires_explicit_true(self):
+        rows = [
+            {"id": "ok", "success": True},
+            {"id": "http-legacy", "status_code": 200},
+            {"id": "false", "success": False},
+            {"id": "truthy", "success": "true"},
+        ]
+
+        self.assertEqual(successful_request_results(rows), [rows[0]])
+
     def test_summarize_request_results_reports_histograms_and_latency(self):
         summary = summarize_request_results(
             [

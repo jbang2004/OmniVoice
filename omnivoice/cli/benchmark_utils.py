@@ -7,6 +7,29 @@ from collections import Counter
 from typing import Any, Iterable, Optional
 
 
+def request_exception_result(
+    *,
+    request_id: str,
+    exc: BaseException,
+    request_wall_s: float,
+    **extra: Any,
+) -> dict[str, Any]:
+    message = str(exc) or exc.__class__.__name__
+    return {
+        "id": request_id,
+        "success": False,
+        "request_wall_s": request_wall_s,
+        "error": f"{exc.__class__.__name__}: {message}",
+        **extra,
+    }
+
+
+def successful_request_results(
+    results: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [row for row in results if row.get("success") is True]
+
+
 def summarize_request_results(
     results: Iterable[dict[str, Any]],
     *,
