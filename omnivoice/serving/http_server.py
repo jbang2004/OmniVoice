@@ -241,7 +241,13 @@ def create_online_batch_app(
         if len(payload.text) > state.max_request_text_chars:
             raise HTTPException(
                 status_code=413,
-                detail=f"text exceeds {state.max_request_text_chars} characters",
+                detail={
+                    "code": "text_too_long",
+                    "message": (
+                        "text exceeds "
+                        f"{state.max_request_text_chars} characters"
+                    ),
+                },
             )
         for field_name in (
             "language",

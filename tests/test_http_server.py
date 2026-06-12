@@ -524,6 +524,31 @@ class HttpServerTests(unittest.TestCase):
         self.assertIn("request_id", response.json()["detail"]["message"])
         self.assertEqual(scheduler.requests, [])
 
+    def test_text_too_long_maps_to_structured_413(self):
+        cases = (
+            ("/v1/tts", {"text": "x" * 21}),
+            (
+                "/v1/tts_batch",
+                {
+                    "requests": [
+                        {"request_id": "ok", "text": "short"},
+                        {"request_id": "too-long", "text": "x" * 21},
+                    ]
+                },
+            ),
+        )
+
+        for path, payload in cases:
+            scheduler = FakeScheduler()
+            with self.subTest(path=path):
+                with self._client(scheduler) as client:
+                    response = client.post(path, json=payload)
+
+                self.assertEqual(response.status_code, 413)
+                self.assertEqual(response.json()["detail"]["code"], "text_too_long")
+                self.assertIn("20 characters", response.json()["detail"]["message"])
+                self.assertEqual(scheduler.requests, [])
+
     def test_rejects_blank_request_mode_fields(self):
         cases = (
             ("/v1/tts", {"text": "hello", "language_id": "   "}, "language_id"),

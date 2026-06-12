@@ -57,6 +57,10 @@ Request bodies are strict. Unknown JSON fields return `422` instead of being
 ignored, so misspelled controls such as `duraton` fail fast instead of silently
 dropping duration or speed settings.
 
+Server-side request errors use structured `detail` payloads with `code` and
+`message` fields. For example, text longer than `--max_request_text_chars`
+returns `413` with `code: "text_too_long"`.
+
 ## Voice Registration
 
 Register a reference voice once, then reuse its `voice_id` in later requests.
