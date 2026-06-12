@@ -9,7 +9,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal, Mapping, Optional
+from typing import Any, Awaitable, Callable, Literal, Mapping, Optional, Union
 
 import numpy as np
 import soundfile as sf
@@ -100,13 +100,23 @@ def _require_fastapi():
     try:
         from fastapi import Body, FastAPI, HTTPException
         from fastapi.responses import Response
-        from pydantic import BaseModel, Field
+        from pydantic import BaseModel, Field, StrictBool, StrictFloat, StrictInt
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise RuntimeError(
             "FastAPI serving dependencies are not installed. Install with "
             "`pip install omnivoice[serve]` or install fastapi and uvicorn."
         ) from exc
-    return Body, FastAPI, HTTPException, Response, BaseModel, Field
+    return (
+        Body,
+        FastAPI,
+        HTTPException,
+        Response,
+        BaseModel,
+        Field,
+        StrictBool,
+        StrictFloat,
+        StrictInt,
+    )
 
 
 def _decode_ref_audio_bytes(raw: bytes, sample_rate: int) -> tuple[np.ndarray, int]:
@@ -134,7 +144,18 @@ def create_online_batch_app(
 ):
     """Create a FastAPI app around a single resident batch scheduler."""
 
-    Body, FastAPI, HTTPException, Response, BaseModel, Field = _require_fastapi()
+    (
+        Body,
+        FastAPI,
+        HTTPException,
+        Response,
+        BaseModel,
+        Field,
+        StrictBool,
+        StrictFloat,
+        StrictInt,
+    ) = _require_fastapi()
+    StrictNumber = Union[StrictFloat, StrictInt]
     state.startup_warmup.configure(enabled=startup_warmup is not None)
 
     class TTSRequest(BaseModel):
@@ -147,10 +168,10 @@ def create_online_batch_app(
         ref_audio_base64: Optional[str] = None
         ref_text: Optional[str] = None
         instruct: Optional[str] = None
-        duration: Optional[float] = Field(default=None, gt=0)
-        speed: Optional[float] = Field(default=None, gt=0)
-        enforce_output_duration: Optional[bool] = None
-        cost_tokens_hint: Optional[int] = Field(default=None, gt=0)
+        duration: Optional[StrictNumber] = Field(default=None, gt=0)
+        speed: Optional[StrictNumber] = Field(default=None, gt=0)
+        enforce_output_duration: Optional[StrictBool] = None
+        cost_tokens_hint: Optional[StrictInt] = Field(default=None, gt=0)
         priority: Literal["normal", "high"] = "normal"
 
     class TTSBatchRequest(BaseModel):
@@ -162,10 +183,10 @@ def create_online_batch_app(
         ref_audio: Optional[str] = None
         ref_audio_base64: Optional[str] = None
         ref_text: Optional[str] = None
-        preprocess_prompt: Optional[bool] = None
+        preprocess_prompt: Optional[StrictBool] = None
 
     class ResetMetricsRequest(BaseModel):
-        reset_prompt_cache_stats: bool = True
+        reset_prompt_cache_stats: StrictBool = True
 
     @asynccontextmanager
     async def lifespan(app):

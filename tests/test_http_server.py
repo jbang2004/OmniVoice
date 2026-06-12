@@ -284,6 +284,24 @@ class HttpServerTests(unittest.TestCase):
         self.assertTrue(scheduler.requests[0].enforce_output_duration)
         self.assertEqual(scheduler.requests[0].cost_tokens_hint, 77)
 
+    def test_tts_rejects_coerced_generation_field_types(self):
+        cases = [
+            {"text": "hello", "enforce_output_duration": "false"},
+            {"text": "hello", "duration": "1.5"},
+            {"text": "hello", "duration": True},
+            {"text": "hello", "speed": "1.2"},
+            {"text": "hello", "cost_tokens_hint": "77"},
+            {"text": "hello", "cost_tokens_hint": 77.0},
+        ]
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            for payload in cases:
+                with self.subTest(payload=payload):
+                    response = client.post("/v1/tts", json=payload)
+                    self.assertEqual(response.status_code, 422)
+
+        self.assertEqual(scheduler.requests, [])
+
     def test_reset_scheduler_metrics_endpoint(self):
         scheduler = FakeScheduler()
         with self._client(scheduler) as client:
@@ -298,6 +316,17 @@ class HttpServerTests(unittest.TestCase):
             scheduler.reset_metrics_calls,
             [{"reset_prompt_cache_stats": False}],
         )
+
+    def test_reset_scheduler_metrics_rejects_string_bool(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/scheduler/reset_metrics",
+                json={"reset_prompt_cache_stats": "false"},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(scheduler.reset_metrics_calls, [])
 
     def test_base64_ref_audio_gets_decoded_and_cache_keyed(self):
         scheduler = FakeScheduler()
@@ -438,6 +467,22 @@ class HttpServerTests(unittest.TestCase):
         )
         self.assertIsNotNone(scheduler.requests[0].voice_clone_prompt)
         self.assertIsNone(scheduler.requests[0].ref_audio)
+
+    def test_register_voice_rejects_string_preprocess_prompt(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/voices",
+                json={
+                    "voice_id": "speaker-a",
+                    "ref_audio_base64": _wav_base64(),
+                    "ref_text": "参考音频",
+                    "preprocess_prompt": "false",
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(scheduler.prompt_requests, [])
 
     def test_voice_registry_is_bounded_and_lru_evicted(self):
         scheduler = FakeScheduler()

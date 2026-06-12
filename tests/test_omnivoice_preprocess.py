@@ -147,6 +147,7 @@ class OmniVoicePreprocessTests(unittest.TestCase):
 
     def test_generation_config_rejects_invalid_numeric_ranges(self):
         invalid_cases = (
+            ("guidance_scale", -0.1, "non-negative number"),
             ("t_shift", 0.0, "positive number"),
             ("audio_chunk_duration", 0.0, "positive number"),
             ("audio_chunk_threshold", 0.0, "positive number"),
@@ -162,14 +163,34 @@ class OmniVoicePreprocessTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"{field_name}.*{message}"):
                     OmniVoiceGenerationConfig(**{field_name: value})
 
+    def test_generation_config_rejects_string_numeric_values(self):
+        invalid_cases = (
+            ("num_step", "32", "positive integer"),
+            ("guidance_scale", "2.0", "non-negative number"),
+            ("t_shift", "0.1", "positive number"),
+            ("audio_chunk_duration", "15.0", "positive number"),
+            ("audio_chunk_threshold", "30.0", "positive number"),
+            ("position_temperature", "5.0", "non-negative number"),
+            ("class_temperature", "0.0", "non-negative number"),
+            ("layer_penalty_factor", "5.0", "non-negative number"),
+            ("split_guidance_min_saved_context_ratio", "0.25", "non-negative number"),
+        )
+
+        for field_name, value, message in invalid_cases:
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, f"{field_name}.*{message}"):
+                    OmniVoiceGenerationConfig(**{field_name: value})
+
     def test_generation_config_allows_zero_sampling_temperatures(self):
         config = OmniVoiceGenerationConfig(
+            guidance_scale=0.0,
             position_temperature=0.0,
             class_temperature=0.0,
             layer_penalty_factor=0.0,
             split_guidance_min_saved_context_ratio=0.0,
         )
 
+        self.assertEqual(config.guidance_scale, 0.0)
         self.assertEqual(config.position_temperature, 0.0)
         self.assertEqual(config.class_temperature, 0.0)
         self.assertEqual(config.layer_penalty_factor, 0.0)

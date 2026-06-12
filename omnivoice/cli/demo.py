@@ -42,6 +42,33 @@ from omnivoice.utils.lang_map import LANG_NAMES, lang_display_name
 _ALL_LANGUAGES = ["Auto"] + sorted(lang_display_name(n) for n in LANG_NAMES)
 
 
+def _slider_int(value, default: int):
+    if value is None:
+        return default
+    if isinstance(value, (bool, np.bool_)):
+        return value
+    if isinstance(value, (float, np.floating)) and float(value).is_integer():
+        return int(value)
+    return value
+
+
+def _build_generation_config(
+    *,
+    num_step,
+    guidance_scale,
+    denoise,
+    preprocess_prompt,
+    postprocess_output,
+) -> OmniVoiceGenerationConfig:
+    return OmniVoiceGenerationConfig(
+        num_step=_slider_int(num_step, 32),
+        guidance_scale=guidance_scale if guidance_scale is not None else 2.0,
+        denoise=True if denoise is None else denoise,
+        preprocess_prompt=True if preprocess_prompt is None else preprocess_prompt,
+        postprocess_output=True if postprocess_output is None else postprocess_output,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Voice Design instruction templates
 # ---------------------------------------------------------------------------
@@ -176,12 +203,12 @@ def build_demo(
         if not text or not text.strip():
             return None, "Please enter the text to synthesize."
 
-        gen_config = OmniVoiceGenerationConfig(
-            num_step=int(num_step or 32),
-            guidance_scale=float(guidance_scale) if guidance_scale is not None else 2.0,
-            denoise=bool(denoise) if denoise is not None else True,
-            preprocess_prompt=bool(preprocess_prompt),
-            postprocess_output=bool(postprocess_output),
+        gen_config = _build_generation_config(
+            num_step=num_step,
+            guidance_scale=guidance_scale,
+            denoise=denoise,
+            preprocess_prompt=preprocess_prompt,
+            postprocess_output=postprocess_output,
         )
 
         lang = language if (language and language != "Auto") else None

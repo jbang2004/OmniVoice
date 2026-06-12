@@ -61,6 +61,10 @@ class OmniVoiceGenerationConfig:
             "split_guidance_min_batch_size",
         )
         self.t_shift = ensure_positive_float(self.t_shift, "t_shift")
+        self.guidance_scale = ensure_non_negative_float(
+            self.guidance_scale,
+            "guidance_scale",
+        )
         self.audio_chunk_duration = ensure_positive_float(
             self.audio_chunk_duration,
             "audio_chunk_duration",
@@ -209,10 +213,9 @@ def ensure_optional_positive_int(value: Optional[int], name: str) -> Optional[in
 def ensure_positive_float(value: float, name: str) -> float:
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be a positive number")
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a positive number") from exc
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise ValueError(f"{name} must be a positive number")
+    normalized = float(value)
     if not np.isfinite(normalized) or normalized <= 0.0:
         raise ValueError(f"{name} must be a positive number")
     return normalized
@@ -221,10 +224,9 @@ def ensure_positive_float(value: float, name: str) -> float:
 def ensure_non_negative_float(value: float, name: str) -> float:
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be a non-negative number")
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a non-negative number") from exc
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise ValueError(f"{name} must be a non-negative number")
+    normalized = float(value)
     if not np.isfinite(normalized) or normalized < 0.0:
         raise ValueError(f"{name} must be a non-negative number")
     return normalized
