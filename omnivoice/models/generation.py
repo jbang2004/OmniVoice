@@ -43,6 +43,48 @@ class OmniVoiceGenerationConfig:
         self.split_guidance_forward = ensure_split_guidance_forward(
             self.split_guidance_forward
         )
+        self.num_step = ensure_positive_int(self.num_step, "num_step")
+        self.batch_size_pad = ensure_optional_positive_int(
+            self.batch_size_pad,
+            "batch_size_pad",
+        )
+        self.seq_len_bucket_multiple = ensure_positive_int(
+            self.seq_len_bucket_multiple,
+            "seq_len_bucket_multiple",
+        )
+        self.target_len_bucket_multiple = ensure_positive_int(
+            self.target_len_bucket_multiple,
+            "target_len_bucket_multiple",
+        )
+        self.split_guidance_min_batch_size = ensure_positive_int(
+            self.split_guidance_min_batch_size,
+            "split_guidance_min_batch_size",
+        )
+        self.t_shift = ensure_positive_float(self.t_shift, "t_shift")
+        self.audio_chunk_duration = ensure_positive_float(
+            self.audio_chunk_duration,
+            "audio_chunk_duration",
+        )
+        self.audio_chunk_threshold = ensure_positive_float(
+            self.audio_chunk_threshold,
+            "audio_chunk_threshold",
+        )
+        self.position_temperature = ensure_non_negative_float(
+            self.position_temperature,
+            "position_temperature",
+        )
+        self.class_temperature = ensure_non_negative_float(
+            self.class_temperature,
+            "class_temperature",
+        )
+        self.layer_penalty_factor = ensure_non_negative_float(
+            self.layer_penalty_factor,
+            "layer_penalty_factor",
+        )
+        self.split_guidance_min_saved_context_ratio = ensure_ratio(
+            self.split_guidance_min_saved_context_ratio,
+            "split_guidance_min_saved_context_ratio",
+        )
 
     @classmethod
     def from_dict(cls, kwargs_dict):
@@ -137,6 +179,54 @@ def ensure_split_guidance_forward(value: Union[bool, str]) -> Union[bool, str]:
         "split_guidance_forward must be true, false, or auto; "
         f"got {value!r}"
     )
+
+
+def ensure_positive_int(value: int, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a positive integer")
+    if not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{name} must be a positive integer")
+    normalized = int(value)
+    if normalized < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return normalized
+
+
+def ensure_optional_positive_int(value: Optional[int], name: str) -> Optional[int]:
+    if value is None:
+        return None
+    return ensure_positive_int(value, name)
+
+
+def ensure_positive_float(value: float, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a positive number")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive number") from exc
+    if not np.isfinite(normalized) or normalized <= 0.0:
+        raise ValueError(f"{name} must be a positive number")
+    return normalized
+
+
+def ensure_non_negative_float(value: float, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a non-negative number")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a non-negative number") from exc
+    if not np.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"{name} must be a non-negative number")
+    return normalized
+
+
+def ensure_ratio(value: float, name: str) -> float:
+    normalized = ensure_non_negative_float(value, name)
+    if normalized > 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return normalized
 
 
 def ensure_optional_bool_list(

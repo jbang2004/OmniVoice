@@ -116,6 +116,51 @@ class OmniVoicePreprocessTests(unittest.TestCase):
 
         self.assertFalse(config.split_guidance_forward)
 
+    def test_generation_config_rejects_invalid_positive_integer_fields(self):
+        for field_name in (
+            "num_step",
+            "batch_size_pad",
+            "seq_len_bucket_multiple",
+            "target_len_bucket_multiple",
+            "split_guidance_min_batch_size",
+        ):
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    f"{field_name} must be a positive integer",
+                ):
+                    OmniVoiceGenerationConfig(**{field_name: 0})
+
+    def test_generation_config_rejects_invalid_numeric_ranges(self):
+        invalid_cases = (
+            ("t_shift", 0.0, "positive number"),
+            ("audio_chunk_duration", 0.0, "positive number"),
+            ("audio_chunk_threshold", 0.0, "positive number"),
+            ("position_temperature", -0.1, "non-negative number"),
+            ("class_temperature", -0.1, "non-negative number"),
+            ("layer_penalty_factor", -0.1, "non-negative number"),
+            ("split_guidance_min_saved_context_ratio", -0.1, "non-negative number"),
+            ("split_guidance_min_saved_context_ratio", 1.1, "between 0 and 1"),
+        )
+
+        for field_name, value, message in invalid_cases:
+            with self.subTest(field_name=field_name, value=value):
+                with self.assertRaisesRegex(ValueError, f"{field_name}.*{message}"):
+                    OmniVoiceGenerationConfig(**{field_name: value})
+
+    def test_generation_config_allows_zero_sampling_temperatures(self):
+        config = OmniVoiceGenerationConfig(
+            position_temperature=0.0,
+            class_temperature=0.0,
+            layer_penalty_factor=0.0,
+            split_guidance_min_saved_context_ratio=0.0,
+        )
+
+        self.assertEqual(config.position_temperature, 0.0)
+        self.assertEqual(config.class_temperature, 0.0)
+        self.assertEqual(config.layer_penalty_factor, 0.0)
+        self.assertEqual(config.split_guidance_min_saved_context_ratio, 0.0)
+
     def test_fit_audio_to_duration_pads_and_crops_last_axis(self):
         mono = np.arange(4, dtype=np.float32)
         padded = fit_audio_to_duration(mono, 0.006, sample_rate=1000)
