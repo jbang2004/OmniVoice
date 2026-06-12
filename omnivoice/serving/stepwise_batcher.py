@@ -20,7 +20,9 @@ import torch
 from omnivoice.models.generation import (
     OmniVoiceGenerationConfig,
     ensure_bool,
+    ensure_min_float,
     ensure_non_negative_float,
+    ensure_non_negative_int,
     ensure_positive_int,
     fit_audio_to_duration,
     resolve_optional_bool_flags,
@@ -29,8 +31,6 @@ from omnivoice.serving.batcher import (
     OmniVoiceBatchRequest,
     OmniVoiceBatchResult,
     _VoiceClonePromptCache,
-    _ensure_min_float,
-    _ensure_non_negative_int,
 )
 from omnivoice.serving.stepwise import (
     StepwiseGenerationState,
@@ -81,7 +81,7 @@ class StepwiseSchedulerConfig:
         object.__setattr__(
             self,
             "prompt_cache_entries",
-            _ensure_non_negative_int(
+            ensure_non_negative_int(
                 self.prompt_cache_entries,
                 "prompt_cache_entries",
             ),
@@ -96,7 +96,7 @@ class StepwiseSchedulerConfig:
             object.__setattr__(
                 self,
                 field_name,
-                _ensure_min_float(getattr(self, field_name), field_name, 1.0),
+                ensure_min_float(getattr(self, field_name), field_name, 1.0),
             )
         for field_name in (
             "profile_cuda",

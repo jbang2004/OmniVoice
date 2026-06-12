@@ -210,6 +210,17 @@ def ensure_optional_positive_int(value: Optional[int], name: str) -> Optional[in
     return ensure_positive_int(value, name)
 
 
+def ensure_non_negative_int(value: int, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a non-negative integer")
+    if not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{name} must be a non-negative integer")
+    normalized = int(value)
+    if normalized < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return normalized
+
+
 def ensure_positive_float(value: float, name: str) -> float:
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be a positive number")
@@ -236,6 +247,13 @@ def ensure_ratio(value: float, name: str) -> float:
     normalized = ensure_non_negative_float(value, name)
     if normalized > 1.0:
         raise ValueError(f"{name} must be between 0 and 1")
+    return normalized
+
+
+def ensure_min_float(value: float, name: str, minimum: float) -> float:
+    normalized = ensure_non_negative_float(value, name)
+    if normalized < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
     return normalized
 
 

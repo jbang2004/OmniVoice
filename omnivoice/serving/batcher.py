@@ -22,30 +22,14 @@ import soundfile as sf
 
 from omnivoice.models.generation import (
     ensure_bool,
+    ensure_min_float,
     ensure_non_negative_float,
-    ensure_positive_float,
+    ensure_non_negative_int,
     ensure_positive_int,
+    ensure_positive_float,
     resolve_optional_bool_flags,
 )
 from omnivoice.models.omnivoice import VoiceClonePrompt, _ref_audio_tuple_cache_marker
-
-
-def _ensure_non_negative_int(value: int, name: str) -> int:
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{name} must be a non-negative integer")
-    if not isinstance(value, (int, np.integer)):
-        raise ValueError(f"{name} must be a non-negative integer")
-    normalized = int(value)
-    if normalized < 0:
-        raise ValueError(f"{name} must be a non-negative integer")
-    return normalized
-
-
-def _ensure_min_float(value: float, name: str, minimum: float) -> float:
-    normalized = ensure_non_negative_float(value, name)
-    if normalized < minimum:
-        raise ValueError(f"{name} must be >= {minimum}")
-    return normalized
 
 
 def _ensure_non_empty_str(value: str, name: str) -> str:
@@ -110,7 +94,7 @@ class BatchSchedulerConfig:
         object.__setattr__(
             self,
             "prompt_cache_entries",
-            _ensure_non_negative_int(
+            ensure_non_negative_int(
                 self.prompt_cache_entries,
                 "prompt_cache_entries",
             ),
@@ -125,7 +109,7 @@ class BatchSchedulerConfig:
             object.__setattr__(
                 self,
                 field_name,
-                _ensure_min_float(getattr(self, field_name), field_name, 1.0),
+                ensure_min_float(getattr(self, field_name), field_name, 1.0),
             )
         object.__setattr__(
             self,
