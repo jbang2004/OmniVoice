@@ -7,7 +7,11 @@ import soundfile as sf
 import torch
 
 from omnivoice.models.omnivoice import VoiceClonePrompt
-from omnivoice.serving import OnlineBatchServerState, SchedulerSnapshot
+from omnivoice.serving import (
+    OnlineBatchServerState,
+    SchedulerSnapshot,
+    VoicePromptRegistry,
+)
 from omnivoice.serving.http_server import create_online_batch_app
 
 
@@ -199,6 +203,22 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(body["scheduler"]["total_batches"], 1)
         self.assertEqual(body["voices"]["max_entries"], 7)
         self.assertEqual(body["startup_warmup"]["status"], "disabled")
+
+    def test_server_snapshot_uses_existing_voice_registry_capacity(self):
+        scheduler = FakeScheduler()
+        registry = VoicePromptRegistry(max_entries=3)
+        state = OnlineBatchServerState(
+            scheduler=scheduler,
+            max_voice_prompts=256,
+            voice_prompts=registry,
+        )
+        with self._client_with_state(state) as client:
+            response = client.get("/v1/server")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["server"]["max_voice_prompts"], 3)
+        self.assertEqual(body["voices"]["max_entries"], 3)
 
     def test_healthz_reports_completed_startup_warmup(self):
         from fastapi.testclient import TestClient

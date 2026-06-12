@@ -84,6 +84,11 @@ class OnlineBatchServerState:
 
     def __post_init__(self):
         if isinstance(self.voice_prompts, VoicePromptRegistry):
+            object.__setattr__(
+                self,
+                "max_voice_prompts",
+                self.voice_prompts.max_entries,
+            )
             return
         object.__setattr__(
             self,
