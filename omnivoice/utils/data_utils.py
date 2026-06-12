@@ -31,9 +31,10 @@ def read_test_list(path):
 
     Each line should be a JSON object.  Only ``id`` and ``text`` are required;
     all other fields are optional (default to ``None``):
-        id, text, ref_audio, ref_audio_base64, ref_text, voice_id, instruct,
-        language_id, language_name, duration, speed, cost_tokens_hint,
-        context_tokens_hint, priority, preprocess_prompt
+        id, save_name, text, ref_audio, ref_audio_base64, ref_text, voice_id,
+        instruct, language_id, language, language_name, duration, speed,
+        enforce_output_duration, cost_tokens_hint, context_tokens_hint,
+        priority, preprocess_prompt
 
     Note: ``language_name`` is only used by evaluation scripts (under
     ``omnivoice/eval/``) for grouping and reporting results.  The model
@@ -56,15 +57,18 @@ def read_test_list(path):
 
             sample = {
                 "id": obj.get("id"),
+                "save_name": obj.get("save_name"),
                 "text": obj.get("text"),
                 "ref_audio": obj.get("ref_audio"),
                 "ref_audio_base64": obj.get("ref_audio_base64"),
                 "ref_text": obj.get("ref_text"),
                 "voice_id": obj.get("voice_id"),
                 "language_id": obj.get("language_id"),
+                "language": obj.get("language"),
                 "language_name": obj.get("language_name"),
                 "duration": obj.get("duration"),
                 "speed": obj.get("speed"),
+                "enforce_output_duration": obj.get("enforce_output_duration"),
                 "cost_tokens_hint": obj.get("cost_tokens_hint"),
                 "context_tokens_hint": obj.get("context_tokens_hint"),
                 "instruct": obj.get("instruct"),

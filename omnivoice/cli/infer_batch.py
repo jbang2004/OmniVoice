@@ -25,10 +25,11 @@ Usage:
         --test_list test.jsonl --res_dir results/
 
 Test list format (JSONL, one JSON object per line):
-    Required fields: "id", "text"
+    Required fields: "id" or "save_name", plus "text"
     Voice cloning:   "ref_audio", "ref_text"
     Voice design:    "instruct"
-    Optional:        "language_id", "duration", "speed"
+    Optional:        "language_id" or "language", "duration", "speed",
+                     "enforce_output_duration"
 """
 
 import argparse
@@ -386,6 +387,32 @@ def cluster_samples_by_batch_size(
     return batches
 
 
+def sample_tuple_from_test_list_row(
+    sample: dict,
+    *,
+    lang_id_override: Optional[str] = None,
+) -> Tuple:
+    save_name = sample.get("id") or sample.get("save_name")
+    if not save_name:
+        raise ValueError("Each test-list sample requires id or save_name")
+    lang_id = (
+        lang_id_override
+        if lang_id_override is not None
+        else sample.get("language_id") or sample.get("language")
+    )
+    return (
+        save_name,
+        sample.get("ref_text"),
+        sample.get("ref_audio"),
+        sample["text"],
+        lang_id,
+        sample.get("duration"),
+        sample.get("speed"),
+        sample.get("instruct"),
+        sample.get("enforce_output_duration"),
+    )
+
+
 def run_inference_batch(
     batch_samples: List[Tuple],
     res_dir: str,
@@ -492,22 +519,13 @@ def main():
         rank_queue.put((device_type, rank))
 
     samples_raw = read_test_list(args.test_list)
-    samples = []
-    for s in samples_raw:
-        lang_id = args.lang_id if args.lang_id is not None else s.get("language_id")
-        samples.append(
-            (
-                s["id"],
-                s.get("ref_text"),
-                s.get("ref_audio"),
-                s["text"],
-                lang_id,
-                s.get("duration"),
-                s.get("speed"),
-                s.get("instruct"),
-                s.get("enforce_output_duration"),
-            )
+    samples = [
+        sample_tuple_from_test_list_row(
+            sample,
+            lang_id_override=args.lang_id,
         )
+        for sample in samples_raw
+    ]
 
     total_synthesis_time = []
     total_audio_duration = []

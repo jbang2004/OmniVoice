@@ -946,6 +946,32 @@ class BenchmarkUtilsTests(unittest.TestCase):
         )
         self.assertEqual([result[0] for result in results], ["a", "b"])
 
+    def test_infer_batch_sample_tuple_uses_serving_field_fallbacks(self):
+        sample = {
+            "save_name": "saved-r1",
+            "text": "hello",
+            "language": "en",
+            "duration": 1.2,
+            "speed": 1.1,
+            "enforce_output_duration": True,
+        }
+
+        result = infer_batch_cli.sample_tuple_from_test_list_row(sample)
+        overridden = infer_batch_cli.sample_tuple_from_test_list_row(
+            sample,
+            lang_id_override="zh",
+        )
+
+        self.assertEqual(result[0], "saved-r1")
+        self.assertEqual(result[4], "en")
+        self.assertEqual(result[5], 1.2)
+        self.assertEqual(result[6], 1.1)
+        self.assertTrue(result[8])
+        self.assertEqual(overridden[4], "zh")
+
+        with self.assertRaisesRegex(ValueError, "id or save_name"):
+            infer_batch_cli.sample_tuple_from_test_list_row({"text": "hello"})
+
     def test_heterogeneous_generator_can_create_context_outliers(self):
         args = argparse.Namespace(
             groups=1,
@@ -1703,12 +1729,15 @@ class BenchmarkUtilsTests(unittest.TestCase):
     def test_read_test_list_preserves_serving_fields(self):
         row = {
             "id": "r1",
+            "save_name": "saved-r1",
             "text": "hello",
+            "language": "en",
             "voice_id": "speaker-a",
             "ref_audio_base64": "abc",
             "priority": "high",
             "cost_tokens_hint": 88,
             "context_tokens_hint": 188,
+            "enforce_output_duration": False,
             "preprocess_prompt": False,
         }
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1716,11 +1745,14 @@ class BenchmarkUtilsTests(unittest.TestCase):
             path.write_text(json.dumps(row) + "\n", encoding="utf-8")
             samples = read_test_list(path)
 
+        self.assertEqual(samples[0]["save_name"], "saved-r1")
+        self.assertEqual(samples[0]["language"], "en")
         self.assertEqual(samples[0]["voice_id"], "speaker-a")
         self.assertEqual(samples[0]["ref_audio_base64"], "abc")
         self.assertEqual(samples[0]["priority"], "high")
         self.assertEqual(samples[0]["cost_tokens_hint"], 88)
         self.assertEqual(samples[0]["context_tokens_hint"], 188)
+        self.assertFalse(samples[0]["enforce_output_duration"])
         self.assertFalse(samples[0]["preprocess_prompt"])
 
     def test_http_result_parses_headers_and_wav_duration(self):
