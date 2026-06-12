@@ -29,8 +29,9 @@ from pathlib import Path
 def read_test_list(path):
     """Read a JSONL test list file.
 
-    Each line should be a JSON object.  Only ``id`` and ``text`` are required;
-    all other fields are optional (default to ``None``):
+    Each line should be a JSON object.  ``text`` and either ``id`` or
+    ``save_name`` are required by inference CLIs; all other fields are optional
+    (default to ``None``):
         id, save_name, text, ref_audio, ref_audio_base64, ref_text, voice_id,
         instruct, language_id, language, language_name, duration, speed,
         enforce_output_duration, cost_tokens_hint, context_tokens_hint,
