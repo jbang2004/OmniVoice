@@ -1188,6 +1188,7 @@ class BenchmarkUtilsTests(unittest.TestCase):
                 "ref_text": "参考",
                 "duration": 1.2,
                 "speed": 1.1,
+                "enforce_output_duration": True,
                 "cost_tokens_hint": 88,
                 "priority": "high",
             }
@@ -1199,6 +1200,7 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(payload["ref_audio"], "/tmp/ref.wav")
         self.assertEqual(payload["ref_audio_base64"], "abc")
         self.assertEqual(payload["duration"], 1.2)
+        self.assertTrue(payload["enforce_output_duration"])
         self.assertEqual(payload["cost_tokens_hint"], 88)
         self.assertEqual(payload["priority"], "high")
         self.assertNotIn("instruct", payload)

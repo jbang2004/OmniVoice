@@ -58,6 +58,7 @@ def _payload_from_sample(sample: dict[str, Any]) -> dict[str, Any]:
         ("instruct", "instruct"),
         ("duration", "duration"),
         ("speed", "speed"),
+        ("enforce_output_duration", "enforce_output_duration"),
         ("cost_tokens_hint", "cost_tokens_hint"),
         ("priority", "priority"),
     ):

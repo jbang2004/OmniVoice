@@ -91,6 +91,7 @@ class _RunningRequest:
     ref_rms: Optional[float]
     started_at: float
     requested_duration: Optional[float] = None
+    enforce_output_duration: bool = False
     max_step_batch_size: int = 1
 
 
@@ -674,6 +675,11 @@ class StepwiseOmniVoiceScheduler:
             requested_duration=task.requested_durations[0]
             if task.requested_durations
             else None,
+            enforce_output_duration=(
+                self.generation_config.enforce_output_duration
+                if request.enforce_output_duration is None
+                else bool(request.enforce_output_duration)
+            ),
             started_at=time.monotonic(),
         )
 
@@ -686,7 +692,7 @@ class StepwiseOmniVoiceScheduler:
                     item.ref_rms,
                     self.generation_config,
                 )
-                if self.generation_config.enforce_output_duration:
+                if item.enforce_output_duration:
                     audio = fit_audio_to_duration(
                         audio,
                         item.requested_duration,

@@ -67,6 +67,22 @@ class ProfiledModel(FakeModel):
         return audios
 
 
+class FixedLengthModel(FakeModel):
+    def __init__(self, length: int):
+        super().__init__()
+        self.length = length
+        self.kwargs = None
+
+    def generate(self, **kwargs):
+        self.kwargs = kwargs
+        texts = kwargs["text"]
+        self.calls.append(list(texts))
+        return [
+            np.ones(self.length, dtype=np.float32) * (index + 1)
+            for index, _ in enumerate(texts)
+        ]
+
+
 class FailingModel(FakeModel):
     def generate(self, **kwargs):
         raise ValueError("model failed")
@@ -108,10 +124,15 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
         context=None,
         enqueued_at=None,
         mode="auto",
+        **request_kwargs,
     ):
         loop = asyncio.get_running_loop()
         return _QueuedRequest(
-            request=OmniVoiceBatchRequest(request_id=request_id, text=request_id),
+            request=OmniVoiceBatchRequest(
+                request_id=request_id,
+                text=request_id,
+                **request_kwargs,
+            ),
             future=loop.create_future(),
             loop=loop,
             enqueued_at=time.monotonic() if enqueued_at is None else enqueued_at,
@@ -749,6 +770,29 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.generation_profile["metadata"]["batch_size"], 2)
         snapshot = scheduler.snapshot()
         self.assertEqual(snapshot.last_batch_profile["timings_s"]["total_s"], 1.0)
+        self.assertEqual(
+            snapshot.last_batch_profile["metadata"]["online_enforce_output_duration"],
+            [False, False],
+        )
+
+    async def test_per_request_output_duration_enforcement_after_model_generation(self):
+        model = FixedLengthModel(length=5)
+        scheduler = OmniVoiceBatchScheduler(
+            model,
+            sample_rate=1000,
+            generation_kwargs={"enforce_output_duration": True},
+        )
+        queued = [
+            self._queued("default", 25, duration=0.008),
+            self._queued("disabled", 25, duration=0.008, enforce_output_duration=False),
+            self._queued("enabled", 25, duration=0.003, enforce_output_duration=True),
+        ]
+
+        scheduler._execute_batch(queued, "full")
+        await asyncio.sleep(0)
+
+        self.assertEqual([len(item.future.result().audio) for item in queued], [8, 5, 3])
+        self.assertNotIn("enforce_output_duration", model.kwargs)
 
     async def test_failed_batch_updates_failure_metrics_and_clears_running_state(self):
         scheduler = OmniVoiceBatchScheduler(FailingModel())

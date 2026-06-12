@@ -101,7 +101,7 @@ curl -s http://127.0.0.1:8000/v1/tts \
   }'
 ```
 
-`enforce_output_duration` is a server startup setting:
+You can enable strict output duration as the server default:
 
 ```bash
 omnivoice-serve-online-batch \
@@ -109,6 +109,22 @@ omnivoice-serve-online-batch \
   --generation_mode optimized \
   --enforce_output_duration true
 ```
+
+Requests can also override the server default per item:
+
+```bash
+curl -s http://127.0.0.1:8000/v1/tts \
+  -H 'content-type: application/json' \
+  -o exact.wav \
+  -d '{
+    "text": "This request enforces its own output duration.",
+    "duration": 3.5,
+    "enforce_output_duration": true
+  }'
+```
+
+The online scheduler applies strict duration after model generation per request,
+so strict and non-strict requests can still share the same micro-batch.
 
 ## Benchmarking
 
@@ -127,4 +143,3 @@ omnivoice-benchmark-server-sweep \
 The benchmark writes per-profile summaries and uses `/v1/scheduler` plus
 response headers to capture queue wait, batch size, token costs, and generation
 profile data.
-

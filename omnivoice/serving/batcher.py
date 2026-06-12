@@ -20,6 +20,7 @@ from typing import Any, Callable, Deque, Optional, Sequence
 import numpy as np
 import soundfile as sf
 
+from omnivoice.models.generation import fit_audio_to_duration
 from omnivoice.models.omnivoice import VoiceClonePrompt, _ref_audio_tuple_cache_marker
 
 
@@ -65,6 +66,7 @@ class OmniVoiceBatchRequest:
     instruct: Optional[str] = None
     duration: Optional[float] = None
     speed: Optional[float] = None
+    enforce_output_duration: Optional[bool] = None
     cost_tokens_hint: Optional[int] = None
     priority: str = "normal"
 
@@ -1355,10 +1357,15 @@ class OmniVoiceBatchScheduler:
         languages = [req.language for req in requests]
         durations = [req.duration for req in requests]
         speeds = [req.speed for req in requests]
+        default_enforce_output_duration = bool(
+            self.generation_kwargs.get("enforce_output_duration", False)
+        )
+        generation_kwargs = dict(self.generation_kwargs)
+        generation_kwargs.pop("enforce_output_duration", None)
         kwargs: dict[str, Any] = {
             "text": texts,
             "language": languages,
-            **self.generation_kwargs,
+            **generation_kwargs,
         }
         if any(duration is not None for duration in durations):
             kwargs["duration"] = durations
@@ -1376,7 +1383,28 @@ class OmniVoiceBatchScheduler:
                 kwargs["instruct"] = instructs
 
         audios = self.model.generate(**kwargs)
+        enforce_flags = [
+            default_enforce_output_duration
+            if req.enforce_output_duration is None
+            else bool(req.enforce_output_duration)
+            for req in requests
+        ]
+        audios = [
+            fit_audio_to_duration(audio, req.duration, self.sample_rate)
+            if enforce_output_duration
+            else audio
+            for audio, req, enforce_output_duration in zip(
+                audios,
+                requests,
+                enforce_flags,
+            )
+        ]
         profile = getattr(self.model, "last_generation_profile", None) or {}
+        if profile:
+            profile = dict(profile)
+            metadata = dict(profile.get("metadata", {}))
+            metadata["online_enforce_output_duration"] = enforce_flags
+            profile["metadata"] = metadata
         return _ModelBatchCallResult(audios=audios, generation_profile=profile)
 
     def _resolve_voice_clone_prompt(

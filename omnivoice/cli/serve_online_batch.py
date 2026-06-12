@@ -342,6 +342,7 @@ def build_app(args):
     scheduler = OmniVoiceBatchScheduler(
         model,
         config=scheduler_config,
+        sample_rate=model.sampling_rate,
         generation_kwargs=_generation_kwargs(args),
     )
     startup_warmup = None

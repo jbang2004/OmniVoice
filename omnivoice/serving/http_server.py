@@ -149,6 +149,7 @@ def create_online_batch_app(
         instruct: Optional[str] = None
         duration: Optional[float] = Field(default=None, gt=0)
         speed: Optional[float] = Field(default=None, gt=0)
+        enforce_output_duration: Optional[bool] = None
         cost_tokens_hint: Optional[int] = Field(default=None, gt=0)
         priority: Literal["normal", "high"] = "normal"
 
@@ -254,6 +255,7 @@ def create_online_batch_app(
             instruct=payload.instruct,
             duration=payload.duration,
             speed=payload.speed,
+            enforce_output_duration=payload.enforce_output_duration,
             cost_tokens_hint=payload.cost_tokens_hint,
             priority=payload.priority,
         )

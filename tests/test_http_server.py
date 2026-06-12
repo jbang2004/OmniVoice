@@ -252,6 +252,8 @@ class HttpServerTests(unittest.TestCase):
                     "request_id": "req-1",
                     "text": "hello",
                     "language": "en",
+                    "duration": 1.5,
+                    "enforce_output_duration": True,
                     "cost_tokens_hint": 77,
                 },
             )
@@ -278,6 +280,8 @@ class HttpServerTests(unittest.TestCase):
         self.assertTrue(scheduler.started)
         self.assertTrue(scheduler.stopped)
         self.assertEqual(scheduler.requests[0].text, "hello")
+        self.assertEqual(scheduler.requests[0].duration, 1.5)
+        self.assertTrue(scheduler.requests[0].enforce_output_duration)
         self.assertEqual(scheduler.requests[0].cost_tokens_hint, 77)
 
     def test_reset_scheduler_metrics_endpoint(self):
