@@ -144,6 +144,24 @@ class OmniVoicePreprocessTests(unittest.TestCase):
                 2,
                 default=False,
             )
+        with self.assertRaisesRegex(
+            ValueError,
+            "enforce_output_duration.*bool",
+        ):
+            model._resolve_enforce_output_duration_flags(
+                ["false"],
+                2,
+                default=False,
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "enforce_output_duration.*bool",
+        ):
+            model._resolve_enforce_output_duration_flags(
+                "false",
+                5,
+                default=False,
+            )
 
     def test_ref_text_none_expands_for_multiple_ref_audios(self):
         model = _bare_model()

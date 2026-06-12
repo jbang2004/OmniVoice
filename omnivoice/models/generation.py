@@ -92,6 +92,61 @@ def resolve_generation_config(
     return replace(config, generation_mode=mode, **preset)
 
 
+def ensure_optional_bool_list(
+    value: Union[bool, list[Optional[bool]], None],
+    batch_size: int,
+    name: str,
+) -> Optional[list[Optional[bool]]]:
+    if value is None:
+        return None
+    if isinstance(value, (bool, np.bool_)):
+        return [bool(value)] * batch_size
+    if isinstance(value, (str, bytes)):
+        raise ValueError(
+            f"{name} should be a bool or a list with length 1 or batch "
+            f"size {batch_size}, but got {type(value).__name__}"
+        )
+    try:
+        values = list(value)
+    except TypeError as exc:
+        raise ValueError(
+            f"{name} should be a bool or a list with length 1 or batch "
+            f"size {batch_size}"
+        ) from exc
+    if len(values) not in (1, batch_size):
+        raise ValueError(
+            f"{name} should be a bool or a list with length 1 or batch "
+            f"size {batch_size}, but got {len(values)}"
+        )
+    if len(values) == 1:
+        values = values * batch_size
+
+    normalized: list[Optional[bool]] = []
+    for item in values:
+        if item is None:
+            normalized.append(None)
+        elif isinstance(item, (bool, np.bool_)):
+            normalized.append(bool(item))
+        else:
+            raise ValueError(f"{name} values must be bool or None")
+    return normalized
+
+
+def resolve_optional_bool_flags(
+    value: Union[bool, list[Optional[bool]], None],
+    batch_size: int,
+    name: str,
+    *,
+    default: bool,
+) -> list[bool]:
+    if not isinstance(default, (bool, np.bool_)):
+        raise ValueError(f"{name} default must be bool")
+    values = ensure_optional_bool_list(value, batch_size, name)
+    if values is None:
+        return [bool(default)] * batch_size
+    return [bool(default) if item is None else bool(item) for item in values]
+
+
 def fit_audio_to_duration(
     audio: np.ndarray,
     target_duration_s: Optional[float],
@@ -110,4 +165,3 @@ def fit_audio_to_duration(
     pad_shape[-1] = target_samples - current_samples
     padding = np.zeros(pad_shape, dtype=audio.dtype)
     return np.concatenate([audio, padding], axis=-1)
-

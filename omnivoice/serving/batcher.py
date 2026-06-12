@@ -20,6 +20,7 @@ from typing import Any, Callable, Deque, Optional, Sequence
 import numpy as np
 import soundfile as sf
 
+from omnivoice.models.generation import resolve_optional_bool_flags
 from omnivoice.models.omnivoice import VoiceClonePrompt, _ref_audio_tuple_cache_marker
 
 
@@ -1356,15 +1357,16 @@ class OmniVoiceBatchScheduler:
         languages = [req.language for req in requests]
         durations = [req.duration for req in requests]
         speeds = [req.speed for req in requests]
-        default_enforce_output_duration = bool(
-            self.generation_kwargs.get("enforce_output_duration", False)
+        default_enforce_output_duration = self.generation_kwargs.get(
+            "enforce_output_duration",
+            False,
         )
-        enforce_flags = [
-            default_enforce_output_duration
-            if req.enforce_output_duration is None
-            else bool(req.enforce_output_duration)
-            for req in requests
-        ]
+        enforce_flags = resolve_optional_bool_flags(
+            [req.enforce_output_duration for req in requests],
+            len(requests),
+            "enforce_output_duration",
+            default=default_enforce_output_duration,
+        )
         generation_kwargs = dict(self.generation_kwargs)
         generation_kwargs.pop("enforce_output_duration", None)
         kwargs: dict[str, Any] = {

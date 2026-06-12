@@ -71,8 +71,10 @@ from omnivoice.utils.audio import (
 )
 from omnivoice.models.generation import (
     OmniVoiceGenerationConfig,
+    ensure_optional_bool_list as _ensure_optional_bool_list,
     fit_audio_to_duration,
     resolve_generation_config as _resolve_generation_config,
+    resolve_optional_bool_flags as _resolve_optional_bool_flags,
 )
 from omnivoice.utils.duration import RuleDurationEstimator
 from omnivoice.utils.lang_map import LANG_IDS, LANG_NAMES
@@ -1583,19 +1585,7 @@ class OmniVoice(PreTrainedModel):
         batch_size: int,
         name: str,
     ) -> Optional[List[Optional[bool]]]:
-        if x is None:
-            return None
-        if isinstance(x, bool):
-            return [x] * batch_size
-        values = list(x)
-        if len(values) not in (1, batch_size):
-            raise ValueError(
-                f"{name} should be a bool or a list with length 1 or batch "
-                f"size {batch_size}, but got {len(values)}"
-            )
-        if len(values) == 1:
-            values = values * batch_size
-        return [None if value is None else bool(value) for value in values]
+        return _ensure_optional_bool_list(x, batch_size, name)
 
     def _resolve_enforce_output_duration_flags(
         self,
@@ -1604,14 +1594,12 @@ class OmniVoice(PreTrainedModel):
         *,
         default: bool,
     ) -> List[bool]:
-        values = self._ensure_optional_bool_list(
+        return _resolve_optional_bool_flags(
             enforce_output_duration,
             batch_size,
             "enforce_output_duration",
+            default=default,
         )
-        if values is None:
-            return [bool(default)] * batch_size
-        return [bool(default) if value is None else bool(value) for value in values]
 
     @staticmethod
     def _voice_clone_prompt_cache_key(
