@@ -54,14 +54,36 @@ class OmniVoicePreprocessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown generation_mode"):
             OmniVoiceGenerationConfig(generation_mode="mystery")
 
-    def test_generation_config_rejects_non_bool_strict_duration_default(self):
-        with self.assertRaisesRegex(ValueError, "enforce_output_duration must be bool"):
-            OmniVoiceGenerationConfig(enforce_output_duration="false")
+    def test_generation_config_rejects_non_bool_defaults(self):
+        for field_name in (
+            "denoise",
+            "preprocess_prompt",
+            "postprocess_output",
+            "batched_decode",
+            "collect_profile",
+            "reuse_static_input_embeds",
+            "enforce_output_duration",
+        ):
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, f"{field_name} must be bool"):
+                    OmniVoiceGenerationConfig(**{field_name: "false"})
 
         with self.assertRaisesRegex(ValueError, "enforce_output_duration must be bool"):
             OmniVoiceGenerationConfig.from_dict(
                 {"enforce_output_duration": "false"}
             )
+
+    def test_generation_mode_preset_overrides_low_level_bool_before_validation(self):
+        config = OmniVoiceGenerationConfig(
+            generation_mode="official_compatible",
+            batched_decode=True,
+            reuse_static_input_embeds=True,
+            split_guidance_forward="auto",
+        )
+
+        self.assertFalse(config.batched_decode)
+        self.assertFalse(config.reuse_static_input_embeds)
+        self.assertFalse(config.split_guidance_forward)
 
     def test_fit_audio_to_duration_pads_and_crops_last_axis(self):
         mono = np.arange(4, dtype=np.float32)

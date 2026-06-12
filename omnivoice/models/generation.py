@@ -38,10 +38,8 @@ class OmniVoiceGenerationConfig:
         self.generation_mode = mode
         for key, value in GENERATION_MODE_PRESETS[mode].items():
             setattr(self, key, value)
-        self.enforce_output_duration = ensure_bool(
-            self.enforce_output_duration,
-            "enforce_output_duration",
-        )
+        for field_name in STRICT_BOOL_CONFIG_FIELDS:
+            setattr(self, field_name, ensure_bool(getattr(self, field_name), field_name))
 
     @classmethod
     def from_dict(cls, kwargs_dict):
@@ -73,6 +71,16 @@ GENERATION_MODE_ALIASES = {
     "compatible": "official_compatible",
     "throughput": "optimized",
 }
+
+STRICT_BOOL_CONFIG_FIELDS = (
+    "denoise",
+    "preprocess_prompt",
+    "postprocess_output",
+    "batched_decode",
+    "collect_profile",
+    "reuse_static_input_embeds",
+    "enforce_output_duration",
+)
 
 
 def normalize_generation_mode(mode: str) -> str:
