@@ -91,6 +91,7 @@ def _request_from_sample(sample: dict[str, Any], index: int) -> OmniVoiceBatchRe
         instruct=sample.get("instruct"),
         duration=sample.get("duration"),
         speed=sample.get("speed"),
+        enforce_output_duration=sample.get("enforce_output_duration"),
         cost_tokens_hint=sample.get("cost_tokens_hint"),
         priority=sample.get("priority") or "normal",
     )

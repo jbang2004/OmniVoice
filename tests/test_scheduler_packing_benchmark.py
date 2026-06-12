@@ -2,6 +2,7 @@ import unittest
 
 from omnivoice.cli.benchmark_scheduler_packing import (
     _compare_to_baseline,
+    _request_from_sample,
     simulate_packing,
 )
 from omnivoice.serving import BatchSchedulerConfig
@@ -26,6 +27,20 @@ class SchedulerPackingBenchmarkTests(unittest.TestCase):
             candidate_pack_policy=policy,
             adaptive_memory_batch_cap=False,
         )
+
+    def test_request_from_sample_preserves_strict_duration_flag(self):
+        request = _request_from_sample(
+            {
+                "id": "r1",
+                "text": "hello",
+                "duration": 1.2,
+                "enforce_output_duration": True,
+            },
+            index=0,
+        )
+
+        self.assertEqual(request.duration, 1.2)
+        self.assertTrue(request.enforce_output_duration)
 
     def test_target_context_policy_reduces_context_padding_work(self):
         samples = [

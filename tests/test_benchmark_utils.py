@@ -48,6 +48,7 @@ from omnivoice.cli.benchmark_utils import (
 )
 from omnivoice.cli.infer_online_batch import (
     _effective_compile_mode as _online_effective_compile_mode,
+    _request_from_sample as _online_request_from_sample,
     _run_scheduler_warmup,
     _select_representative_warmup_batches,
     _select_representative_warmup_samples,
@@ -1052,6 +1053,21 @@ class BenchmarkUtilsTests(unittest.TestCase):
             ],
         )
 
+    def test_online_request_from_sample_preserves_strict_duration_flag(self):
+        request = _online_request_from_sample(
+            {
+                "id": "r1",
+                "text": "hello",
+                "language_id": "en",
+                "duration": 1.2,
+                "enforce_output_duration": True,
+            }
+        )
+
+        self.assertEqual(request.request_id, "r1")
+        self.assertEqual(request.duration, 1.2)
+        self.assertTrue(request.enforce_output_duration)
+
     def test_scheduler_aware_warmup_fill_respects_target_token_cap(self):
         samples = [
             {
@@ -1357,6 +1373,19 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(rewritten[0]["voice_clone_prompt"], rewritten[1]["voice_clone_prompt"])
         self.assertEqual(request.voice_clone_prompt, "prompt-1")
         self.assertIsNone(request.ref_audio)
+
+    def test_stepwise_request_from_sample_preserves_strict_duration_flag(self):
+        request = _stepwise_request_from_sample(
+            {
+                "id": "r1",
+                "text": "hello",
+                "duration": 1.2,
+                "enforce_output_duration": False,
+            }
+        )
+
+        self.assertEqual(request.duration, 1.2)
+        self.assertFalse(request.enforce_output_duration)
 
     def test_read_test_list_preserves_serving_fields(self):
         row = {
