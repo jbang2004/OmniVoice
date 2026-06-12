@@ -1446,21 +1446,16 @@ class OmniVoice(PreTrainedModel):
             ref_rms_list = [None] * batch_size
 
         # Normalize speed/duration to per-item lists (may contain None).
-        if speed is not None:
-            if isinstance(speed, (int, float)):
-                user_speed = [float(speed)] * batch_size
-            else:
-                user_speed = list(speed)
-        else:
-            user_speed = None
-
-        if duration is not None:
-            if isinstance(duration, (int, float)):
-                durations = [float(duration)] * batch_size
-            else:
-                durations = list(duration)
-        else:
-            durations = None
+        user_speed = self._ensure_optional_positive_float_list(
+            speed,
+            batch_size,
+            "speed",
+        )
+        durations = self._ensure_optional_positive_float_list(
+            duration,
+            batch_size,
+            "duration",
+        )
 
         num_target_tokens_list = []
         for i in range(batch_size):
@@ -1537,6 +1532,37 @@ class OmniVoice(PreTrainedModel):
         if auto_repeat and len(x_list) == 1 and batch_size is not None:
             x_list = x_list * batch_size
         return x_list
+
+    @staticmethod
+    def _ensure_optional_positive_float_list(
+        x: Union[float, list[Optional[float]], None],
+        batch_size: int,
+        name: str,
+    ) -> Optional[List[Optional[float]]]:
+        if x is None:
+            return None
+        if isinstance(x, (int, float)):
+            values: List[Optional[float]] = [float(x)] * batch_size
+        else:
+            values = list(x)
+            if len(values) not in (1, batch_size):
+                raise ValueError(
+                    f"{name} should be a positive number or a list with length "
+                    f"1 or batch size {batch_size}, but got {len(values)}"
+                )
+            if len(values) == 1:
+                values = values * batch_size
+
+        for value in values:
+            if value is None:
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{name} values must be positive numbers or None") from exc
+            if numeric <= 0:
+                raise ValueError(f"{name} values must be positive numbers or None")
+        return [None if value is None else float(value) for value in values]
 
     @staticmethod
     def _voice_clone_prompt_cache_key(

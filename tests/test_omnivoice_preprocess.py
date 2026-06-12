@@ -81,6 +81,43 @@ class OmniVoicePreprocessTests(unittest.TestCase):
         self.assertIsNotNone(sliced)
         self.assertEqual(sliced.requested_durations, [None])
 
+    def test_preprocess_broadcasts_single_item_duration_and_speed_lists(self):
+        model = _bare_model()
+
+        task = model._preprocess_all(
+            text=["first", "second"],
+            duration=[2.0],
+            speed=[1.5],
+        )
+
+        self.assertEqual(task.target_lens, [50, 50])
+        self.assertEqual(task.requested_durations, [2.0, 2.0])
+        self.assertEqual(task.speed, [16 / 50, 16 / 50])
+
+    def test_preprocess_rejects_misaligned_duration_and_speed_lists(self):
+        model = _bare_model()
+
+        with self.assertRaisesRegex(ValueError, "duration.*batch size 2"):
+            model._preprocess_all(
+                text=["first", "second"],
+                duration=[1.0, 2.0, 3.0],
+            )
+
+        with self.assertRaisesRegex(ValueError, "speed.*batch size 2"):
+            model._preprocess_all(
+                text=["first", "second"],
+                speed=[1.0, 1.2, 1.5],
+            )
+
+    def test_preprocess_rejects_non_positive_duration_and_speed(self):
+        model = _bare_model()
+
+        with self.assertRaisesRegex(ValueError, "duration values must be positive"):
+            model._preprocess_all(text="hello", duration=0)
+
+        with self.assertRaisesRegex(ValueError, "speed values must be positive"):
+            model._preprocess_all(text="hello", speed=-1)
+
     def test_ref_text_none_expands_for_multiple_ref_audios(self):
         model = _bare_model()
         calls = []
