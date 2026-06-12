@@ -20,7 +20,6 @@ from typing import Any, Callable, Deque, Optional, Sequence
 import numpy as np
 import soundfile as sf
 
-from omnivoice.models.generation import fit_audio_to_duration
 from omnivoice.models.omnivoice import VoiceClonePrompt, _ref_audio_tuple_cache_marker
 
 
@@ -1360,11 +1359,18 @@ class OmniVoiceBatchScheduler:
         default_enforce_output_duration = bool(
             self.generation_kwargs.get("enforce_output_duration", False)
         )
+        enforce_flags = [
+            default_enforce_output_duration
+            if req.enforce_output_duration is None
+            else bool(req.enforce_output_duration)
+            for req in requests
+        ]
         generation_kwargs = dict(self.generation_kwargs)
         generation_kwargs.pop("enforce_output_duration", None)
         kwargs: dict[str, Any] = {
             "text": texts,
             "language": languages,
+            "enforce_output_duration": enforce_flags,
             **generation_kwargs,
         }
         if any(duration is not None for duration in durations):
@@ -1383,22 +1389,6 @@ class OmniVoiceBatchScheduler:
                 kwargs["instruct"] = instructs
 
         audios = self.model.generate(**kwargs)
-        enforce_flags = [
-            default_enforce_output_duration
-            if req.enforce_output_duration is None
-            else bool(req.enforce_output_duration)
-            for req in requests
-        ]
-        audios = [
-            fit_audio_to_duration(audio, req.duration, self.sample_rate)
-            if enforce_output_duration
-            else audio
-            for audio, req, enforce_output_duration in zip(
-                audios,
-                requests,
-                enforce_flags,
-            )
-        ]
         profile = getattr(self.model, "last_generation_profile", None) or {}
         if profile:
             profile = dict(profile)
