@@ -282,15 +282,32 @@ def create_online_batch_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return ref_audio, ("base64-sha256", raw_hash)
 
+    def server_runtime_snapshot() -> dict[str, Any]:
+        return {
+            "sample_rate": state.sample_rate,
+            "max_request_text_chars": state.max_request_text_chars,
+            "max_voice_prompts": state.max_voice_prompts,
+        }
+
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
         snapshot = state.scheduler.snapshot()
         warmup_status = state.startup_warmup.to_dict()
         return {
             "ok": warmup_status["status"] != "failed",
+            "server": server_runtime_snapshot(),
             "scheduler": snapshot.__dict__,
             "voices": state.voice_prompts.snapshot().__dict__,
             "startup_warmup": warmup_status,
+        }
+
+    @app.get("/v1/server")
+    async def server_snapshot() -> dict[str, Any]:
+        return {
+            "server": server_runtime_snapshot(),
+            "scheduler": state.scheduler.snapshot().__dict__,
+            "voices": state.voice_prompts.snapshot().__dict__,
+            "startup_warmup": state.startup_warmup.to_dict(),
         }
 
     @app.get("/v1/scheduler")

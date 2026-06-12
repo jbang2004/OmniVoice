@@ -46,10 +46,33 @@ audio = model.generate(text="Hello, this is a test of duration control", speed=1
 |---|---|---|---|
 | `duration` | float or list[float \| None] | None | Fixed output duration in seconds. Overrides `speed` when set. |
 | `speed` | float or list[float \| None] | None | Speed factor. Values > 1.0 produce shorter audio (faster); values < 1.0 produce longer audio (slower). Ignored when `duration` is set. Defaults to 1.0 when both are None. |
+| `enforce_output_duration` | bool | False | If `duration` is provided, crop or right-pad the final waveform after post-processing so the returned audio length exactly matches the requested duration. |
 
 Priority: `duration` > `speed`.
 
-> **Note:** When using `duration`, the default post-processing step may trim trailing silence, causing the actual output to be slightly shorter than the requested duration. If you need the output duration to **exactly** match the specified value, set `postprocess_output=False` to disable silence removal.
+`duration` controls the target number of generated audio tokens. The default post-processing step may still trim trailing silence, so the final waveform can be slightly shorter than the requested duration. If you need the returned audio to exactly fit a time slot, set `enforce_output_duration=True`.
+
+In batch mode, `duration` and `speed` may be scalars, lists with one item, or lists with the same length as `text`. Values must be positive numbers or `None`.
+
+```python
+audio = model.generate(
+    text=["first sentence", "second sentence"],
+    duration=[2.5, 4.0],
+    enforce_output_duration=True,
+)
+```
+
+## Generation Modes
+
+`generation_mode` provides a high-level preset for the runtime path:
+
+| Mode | Description |
+|---|---|
+| `custom` | Honor the low-level flags exactly as provided. |
+| `official_compatible` | Pin decode and static-embedding behavior to the original per-item path. |
+| `optimized` | Enable the recommended throughput defaults, including batched decode and static input embedding reuse. |
+
+Use `official_compatible` when comparing against the original implementation, and `optimized` for serving or batch throughput experiments.
 
 ## Pre/Post Processing
 

@@ -252,7 +252,8 @@ Three CLI entry points are provided. The CLI tools support all features availabl
 |---|---|---|
 | `omnivoice-demo` | Interactive Gradio web demo | [omnivoice/cli/demo.py](omnivoice/cli/demo.py) |
 | `omnivoice-infer` | Single-item inference | [omnivoice/cli/infer.py](omnivoice/cli/infer.py) |
-| `omnivoice-infer-batch` | Batch inference across multiple GPUs | [omnivoice/cli/infer_batch.py](omnivoice/cli/infer_batch.py) |
+| `omnivoice-infer-batch` | Offline batch inference across multiple GPUs | [omnivoice/cli/infer_batch.py](omnivoice/cli/infer_batch.py) |
+| `omnivoice-serve-online-batch` | HTTP server with online micro-batching | [docs/serving.md](docs/serving.md) |
 
 ### Demo
 
@@ -305,6 +306,24 @@ The test list is a JSONL file where each line is a JSON object:
 Only `id` and `text` are mandatory fields. `ref_audio` and `ref_text` are used in voice cloning mode. `instruct` is used in voice design mode. If no reference audio or instruct are provided, the model will generate text in a random voice.
 
 `language_id`, `duration`, and `speed` are optional. `duration` (in seconds) fixes the output length; `speed` controls the speaking rate. If `duration` and `speed` are both provided, `speed` will be ignored.
+
+### Online Batch Serving
+
+For concurrent HTTP serving with one resident GPU model instance:
+
+```bash
+omnivoice-serve-online-batch \
+    --model k2-fsa/OmniVoice \
+    --scheduler_profile balanced12 \
+    --generation_mode optimized \
+    --host 0.0.0.0 \
+    --port 8000
+```
+
+Use `/v1/tts` for single WAV responses, `/v1/tts_batch` for JSON/base64 batch
+responses, and `/v1/voices` to register reusable voice-clone prompts. See
+[docs/serving.md](docs/serving.md) for exact-duration serving, voice registry
+limits, status endpoints, warmup, and benchmark commands.
 
 ---
 

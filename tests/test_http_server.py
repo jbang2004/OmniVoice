@@ -144,7 +144,11 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["ok"])
+        self.assertEqual(body["server"]["sample_rate"], 24000)
+        self.assertEqual(body["server"]["max_request_text_chars"], 20)
+        self.assertEqual(body["server"]["max_voice_prompts"], 256)
         self.assertEqual(body["scheduler"]["total_batches"], 1)
+        self.assertEqual(body["voices"]["size"], 0)
         self.assertEqual(
             body["startup_warmup"],
             {
@@ -156,6 +160,31 @@ class HttpServerTests(unittest.TestCase):
                 "error": None,
             },
         )
+
+    def test_server_snapshot_reports_runtime_scheduler_voice_and_warmup(self):
+        scheduler = FakeScheduler()
+        state = OnlineBatchServerState(
+            scheduler=scheduler,
+            sample_rate=22050,
+            max_request_text_chars=123,
+            max_voice_prompts=7,
+        )
+        with self._client_with_state(state) as client:
+            response = client.get("/v1/server")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(
+            body["server"],
+            {
+                "sample_rate": 22050,
+                "max_request_text_chars": 123,
+                "max_voice_prompts": 7,
+            },
+        )
+        self.assertEqual(body["scheduler"]["total_batches"], 1)
+        self.assertEqual(body["voices"]["max_entries"], 7)
+        self.assertEqual(body["startup_warmup"]["status"], "disabled")
 
     def test_healthz_reports_completed_startup_warmup(self):
         from fastapi.testclient import TestClient
