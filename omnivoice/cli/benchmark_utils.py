@@ -23,11 +23,9 @@ def summarize_request_results(
     ),
 ) -> dict[str, Any]:
     rows = list(results)
-    batch_sizes = [int(row[batch_size_key]) for row in rows if batch_size_key in row]
-    wait_ms = [
-        float(row[queue_wait_ms_key]) for row in rows if queue_wait_ms_key in row
-    ]
-    infer_s = [float(row[infer_s_key]) for row in rows if infer_s_key in row]
+    batch_sizes = _numeric_values(rows, batch_size_key, int)
+    wait_ms = _numeric_values(rows, queue_wait_ms_key, float)
+    infer_s = _numeric_values(rows, infer_s_key, float)
     batch_cost_tokens = _optional_numeric_values(rows, batch_cost_tokens_key, int)
     batch_max_cost_tokens = _optional_numeric_values(
         rows,
@@ -69,9 +67,26 @@ def summarize_request_results(
         )
     if reason_key is not None:
         summary["batch_reason_histogram"] = _histogram(
-            str(row[reason_key]) for row in rows if reason_key in row
+            str(row[reason_key])
+            for row in rows
+            if reason_key in row and row[reason_key] is not None
         )
     return summary
+
+
+def _numeric_values(rows: list[dict[str, Any]], key: str, caster) -> list[float]:
+    values: list[float] = []
+    for row in rows:
+        if key not in row:
+            continue
+        value = row.get(key)
+        if value is None:
+            continue
+        try:
+            values.append(caster(value))
+        except (TypeError, ValueError):
+            continue
+    return values
 
 
 def _optional_numeric_values(
@@ -81,13 +96,7 @@ def _optional_numeric_values(
 ) -> list[float]:
     if key is None:
         return []
-    values: list[float] = []
-    for row in rows:
-        value = row.get(key)
-        if value is None:
-            continue
-        values.append(caster(value))
-    return values
+    return _numeric_values(rows, key, caster)
 
 
 def _histogram(values: Iterable[Any]) -> dict[str, int]:

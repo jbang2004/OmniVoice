@@ -127,6 +127,34 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(summary["batch_max_context_tokens"]["p50"], 200)
         self.assertEqual(summary["batch_context_padding_ratio"]["max"], 1.1)
 
+    def test_summarize_request_results_skips_malformed_metrics(self):
+        summary = summarize_request_results(
+            [
+                {
+                    "batch_size": "bad",
+                    "queue_wait_ms": None,
+                    "batch_infer_s": "bad",
+                    "batch_reason": None,
+                    "batch_cost_tokens": "bad",
+                },
+                {
+                    "batch_size": "2",
+                    "queue_wait_ms": "5.0",
+                    "batch_infer_s": "1.5",
+                    "batch_reason": "full",
+                    "batch_cost_tokens": "120",
+                },
+            ],
+            batch_size_key="batch_size",
+            infer_s_key="batch_infer_s",
+        )
+
+        self.assertEqual(summary["batch_size_histogram"], {"2": 1})
+        self.assertEqual(summary["queue_wait_ms"]["p50"], 5.0)
+        self.assertEqual(summary["request_infer_s"]["p50"], 1.5)
+        self.assertEqual(summary["batch_cost_tokens"]["p50"], 120)
+        self.assertEqual(summary["batch_reason_histogram"], {"full": 1})
+
     def test_http_sweep_grid_and_ranking_helpers(self):
         profiles = build_http_sweep_profiles(
             concurrency_values=parse_int_grid("1, 4"),
@@ -1828,6 +1856,40 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(row["generation_profile"]["timings_s"]["total_s"], 1.0)
         self.assertAlmostEqual(row["audio_s"], 0.1)
         self.assertAlmostEqual(_audio_seconds_from_wav(buf.getvalue()), 0.1)
+
+    def test_http_result_tolerates_malformed_metric_headers(self):
+        audio = np.zeros(2400, dtype=np.float32)
+        buf = io.BytesIO()
+        sf.write(buf, audio, 24000, format="WAV")
+
+        class FakeResponse:
+            status_code = 200
+            content = buf.getvalue()
+            text = ""
+            headers = {
+                "X-OmniVoice-Batch-Size": "bad",
+                "X-OmniVoice-Queue-Wait-Ms": "bad",
+                "X-OmniVoice-Batch-Infer-S": "bad",
+                "X-OmniVoice-Batch-Reason": "",
+            }
+
+        row = _result_from_response(
+            request_id="r1",
+            response=FakeResponse(),
+            request_wall_s=0.31,
+        )
+        summary = summarize_request_results(
+            [row],
+            batch_size_key="batch_size",
+            infer_s_key="batch_infer_s",
+        )
+
+        self.assertTrue(row["success"])
+        self.assertIsNone(row["batch_size"])
+        self.assertIsNone(row["queue_wait_ms"])
+        self.assertIsNone(row["batch_infer_s"])
+        self.assertEqual(summary["batch_size_histogram"], {})
+        self.assertEqual(summary["request_infer_s"]["p50"], None)
 
     def test_http_result_extracts_structured_error_detail(self):
         class FakeResponse:

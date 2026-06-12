@@ -330,7 +330,7 @@ def _result_from_response(
     audio_s = _audio_seconds_from_wav(content)
     row.update(
         {
-            "batch_size": int(headers.get("x-omnivoice-batch-size", "0")),
+            "batch_size": _int_header(headers, "x-omnivoice-batch-size"),
             "queue_wait_ms": _float_header(headers, "x-omnivoice-queue-wait-ms"),
             "batch_infer_s": _float_header(headers, "x-omnivoice-batch-infer-s"),
             "batch_reason": headers.get("x-omnivoice-batch-reason"),
