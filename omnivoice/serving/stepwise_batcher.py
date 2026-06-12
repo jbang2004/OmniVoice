@@ -202,7 +202,9 @@ class StepwiseOmniVoiceScheduler:
 
     async def start(self) -> None:
         if self._thread is not None:
-            return
+            if self._thread.is_alive():
+                return
+            self._thread = None
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._engine_loop,
@@ -217,7 +219,8 @@ class StepwiseOmniVoiceScheduler:
             self._state.notify_all()
         if self._thread is not None:
             self._thread.join(timeout=10.0)
-            self._thread = None
+            if not self._thread.is_alive():
+                self._thread = None
 
         pending: list[_WaitingRequest] = []
         controls: list[_ControlRequest] = []

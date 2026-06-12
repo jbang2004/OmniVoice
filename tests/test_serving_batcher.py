@@ -137,6 +137,18 @@ class EstimatingModel(FakeModel):
         return 123 / speed
 
 
+class FakeThread:
+    def __init__(self, *, alive: bool):
+        self.alive = alive
+        self.join_timeouts = []
+
+    def join(self, timeout=None):
+        self.join_timeouts.append(timeout)
+
+    def is_alive(self):
+        return self.alive
+
+
 class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
     def _queued(
         self,
@@ -317,6 +329,29 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
             )
         with self.assertRaisesRegex(RuntimeError, "scheduler stopped"):
             await scheduler._run_control(lambda: "ok")
+
+    async def test_stop_preserves_thread_reference_when_join_times_out(self):
+        scheduler = OmniVoiceBatchScheduler(FakeModel())
+        thread = FakeThread(alive=True)
+        scheduler._thread = thread
+
+        await scheduler.stop()
+
+        self.assertIs(scheduler._thread, thread)
+        self.assertEqual(thread.join_timeouts, [10.0])
+        with self.assertRaisesRegex(RuntimeError, "scheduler stopped"):
+            await scheduler.submit(OmniVoiceBatchRequest(request_id="x", text="x"))
+
+    async def test_start_replaces_stale_dead_thread_reference(self):
+        scheduler = OmniVoiceBatchScheduler(FakeModel())
+        scheduler._thread = FakeThread(alive=False)
+
+        await scheduler.start()
+        try:
+            self.assertIsNotNone(scheduler._thread)
+            self.assertTrue(scheduler._thread.is_alive())
+        finally:
+            await scheduler.stop()
 
     async def test_incompatible_modes_do_not_mix(self):
         model = FakeModel()
