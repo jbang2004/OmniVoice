@@ -316,6 +316,42 @@ class HttpServerTests(unittest.TestCase):
 
         self.assertEqual(scheduler.requests, [])
 
+    def test_rejects_unknown_request_fields(self):
+        cases = (
+            ("/v1/tts", {"text": "hello", "duraton": 1.5}, "duraton"),
+            (
+                "/v1/tts_batch",
+                {"requests": [{"text": "hello", "duraton": 1.5}]},
+                "duraton",
+            ),
+            (
+                "/v1/tts_batch",
+                {"requests": [{"text": "hello"}], "unknown": True},
+                "unknown",
+            ),
+            (
+                "/v1/voices",
+                {"ref_audio_base64": _wav_base64(), "unknown": True},
+                "unknown",
+            ),
+            (
+                "/v1/scheduler/reset_metrics",
+                {"reset_prompt_cache_stats": False, "unknown": True},
+                "unknown",
+            ),
+        )
+
+        for path, payload, field_name in cases:
+            scheduler = FakeScheduler()
+            with self.subTest(path=path, field_name=field_name):
+                with self._client(scheduler) as client:
+                    response = client.post(path, json=payload)
+
+                self.assertEqual(response.status_code, 422)
+                self.assertIn(field_name, response.text)
+                self.assertEqual(scheduler.requests, [])
+                self.assertEqual(scheduler.prompt_requests, [])
+
     def test_reset_scheduler_metrics_endpoint(self):
         scheduler = FakeScheduler()
         with self._client(scheduler) as client:

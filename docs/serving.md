@@ -53,6 +53,10 @@ omnivoice-serve-online-batch \
 does not have enough capacity for every item, the endpoint returns `429` and no
 item from that HTTP request is submitted for generation.
 
+Request bodies are strict. Unknown JSON fields return `422` instead of being
+ignored, so misspelled controls such as `duraton` fail fast instead of silently
+dropping duration or speed settings.
+
 ## Voice Registration
 
 Register a reference voice once, then reuse its `voice_id` in later requests.

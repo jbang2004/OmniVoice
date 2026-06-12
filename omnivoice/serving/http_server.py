@@ -100,6 +100,10 @@ def _require_fastapi():
         from fastapi import Body, FastAPI, HTTPException
         from fastapi.responses import Response
         from pydantic import BaseModel, Field, StrictBool, StrictFloat, StrictInt
+        try:
+            from pydantic import ConfigDict
+        except ImportError:  # pragma: no cover - pydantic v1 compatibility
+            ConfigDict = None
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise RuntimeError(
             "FastAPI serving dependencies are not installed. Install with "
@@ -115,6 +119,7 @@ def _require_fastapi():
         StrictBool,
         StrictFloat,
         StrictInt,
+        ConfigDict,
     )
 
 
@@ -153,11 +158,20 @@ def create_online_batch_app(
         StrictBool,
         StrictFloat,
         StrictInt,
+        ConfigDict,
     ) = _require_fastapi()
     StrictNumber = Union[StrictFloat, StrictInt]
     state.startup_warmup.configure(enabled=startup_warmup is not None)
 
-    class TTSRequest(BaseModel):
+    if ConfigDict is not None:
+        class StrictRequestModel(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+    else:  # pragma: no cover - pydantic v1 compatibility
+        class StrictRequestModel(BaseModel):
+            class Config:
+                extra = "forbid"
+
+    class TTSRequest(StrictRequestModel):
         request_id: Optional[str] = None
         text: str = Field(min_length=1)
         language: Optional[str] = None
@@ -173,18 +187,18 @@ def create_online_batch_app(
         cost_tokens_hint: Optional[StrictInt] = Field(default=None, gt=0)
         priority: Literal["normal", "high"] = "normal"
 
-    class TTSBatchRequest(BaseModel):
+    class TTSBatchRequest(StrictRequestModel):
         requests: list[TTSRequest] = Field(min_length=1)
         response_format: Literal["json_base64"] = "json_base64"
 
-    class VoicePromptRequest(BaseModel):
+    class VoicePromptRequest(StrictRequestModel):
         voice_id: Optional[str] = None
         ref_audio: Optional[str] = None
         ref_audio_base64: Optional[str] = None
         ref_text: Optional[str] = None
         preprocess_prompt: Optional[StrictBool] = None
 
-    class ResetMetricsRequest(BaseModel):
+    class ResetMetricsRequest(StrictRequestModel):
         reset_prompt_cache_stats: StrictBool = True
 
     @asynccontextmanager
