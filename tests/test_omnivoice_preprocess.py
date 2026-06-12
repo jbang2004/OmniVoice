@@ -11,6 +11,7 @@ from omnivoice.models.omnivoice import (
     VoiceClonePrompt,
 )
 from omnivoice.models.generation import OmniVoiceGenerationConfig, fit_audio_to_duration
+from omnivoice.utils.text import END_PUNCTUATION, add_punctuation
 
 
 def _bare_model():
@@ -23,6 +24,26 @@ def _bare_model():
 
 
 class OmniVoicePreprocessTests(unittest.TestCase):
+    def test_end_punctuation_contains_chinese_sentence_marks(self):
+        for mark in ("；", "：", "，", "。", "！", "？", "、", "……", "）", "】"):
+            with self.subTest(mark=mark):
+                self.assertIn(mark, END_PUNCTUATION)
+
+        self.assertTrue(all("\n" not in mark for mark in END_PUNCTUATION))
+
+    def test_add_punctuation_respects_existing_chinese_sentence_marks(self):
+        for text in (
+            "已经结束。",
+            "真的？",
+            "好了！",
+            "停顿……",
+            "标题】",
+            "括号）",
+            "逗号，",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(add_punctuation(text), text)
+
     def test_generation_config_is_still_reexported_from_omnivoice_module(self):
         self.assertIs(CompatOmniVoiceGenerationConfig, OmniVoiceGenerationConfig)
 
