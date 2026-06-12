@@ -54,6 +54,20 @@ class OmniVoicePreprocessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown generation_mode"):
             OmniVoiceGenerationConfig(generation_mode="mystery")
 
+    def test_generation_config_from_dict_rejects_unknown_fields(self):
+        config = OmniVoiceGenerationConfig.from_dict(
+            {
+                "num_step": 16,
+                "guidance_scale": 1.5,
+            }
+        )
+
+        self.assertEqual(config.num_step, 16)
+        self.assertEqual(config.guidance_scale, 1.5)
+
+        with self.assertRaisesRegex(ValueError, "num_steps"):
+            OmniVoiceGenerationConfig.from_dict({"num_steps": 16})
+
     def test_generation_config_rejects_non_bool_defaults(self):
         for field_name in (
             "denoise",

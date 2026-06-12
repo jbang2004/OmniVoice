@@ -89,6 +89,14 @@ class OmniVoiceGenerationConfig:
     @classmethod
     def from_dict(cls, kwargs_dict):
         valid_keys = {f.name for f in fields(cls)}
+        unknown_keys = sorted(set(kwargs_dict) - valid_keys)
+        if unknown_keys:
+            choices = ", ".join(sorted(valid_keys))
+            unknown = ", ".join(unknown_keys)
+            raise ValueError(
+                f"Unknown generation config field(s): {unknown}. "
+                f"Expected one of: {choices}."
+            )
         filtered = {k: v for k, v in kwargs_dict.items() if k in valid_keys}
         return cls(**filtered)
 
