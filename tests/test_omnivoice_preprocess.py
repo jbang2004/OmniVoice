@@ -7,10 +7,10 @@ import torch
 from omnivoice.models.omnivoice import (
     GenerationTask,
     OmniVoice,
-    OmniVoiceGenerationConfig,
+    OmniVoiceGenerationConfig as CompatOmniVoiceGenerationConfig,
     VoiceClonePrompt,
-    _fit_audio_to_duration,
 )
+from omnivoice.models.generation import OmniVoiceGenerationConfig, fit_audio_to_duration
 
 
 def _bare_model():
@@ -23,6 +23,9 @@ def _bare_model():
 
 
 class OmniVoicePreprocessTests(unittest.TestCase):
+    def test_generation_config_is_still_reexported_from_omnivoice_module(self):
+        self.assertIs(CompatOmniVoiceGenerationConfig, OmniVoiceGenerationConfig)
+
     def test_generation_mode_presets_are_applied(self):
         official = OmniVoiceGenerationConfig(
             generation_mode="official_compatible",
@@ -53,11 +56,11 @@ class OmniVoicePreprocessTests(unittest.TestCase):
 
     def test_fit_audio_to_duration_pads_and_crops_last_axis(self):
         mono = np.arange(4, dtype=np.float32)
-        padded = _fit_audio_to_duration(mono, 0.006, sample_rate=1000)
+        padded = fit_audio_to_duration(mono, 0.006, sample_rate=1000)
         np.testing.assert_allclose(padded, np.array([0, 1, 2, 3, 0, 0], dtype=np.float32))
 
         stereo = np.arange(12, dtype=np.float32).reshape(2, 6)
-        cropped = _fit_audio_to_duration(stereo, 0.004, sample_rate=1000)
+        cropped = fit_audio_to_duration(stereo, 0.004, sample_rate=1000)
         self.assertEqual(cropped.shape, (2, 4))
         np.testing.assert_allclose(cropped, stereo[:, :4])
 

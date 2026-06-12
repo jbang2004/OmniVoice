@@ -17,10 +17,7 @@ from typing import Any, Callable, Deque, Optional
 
 import torch
 
-from omnivoice.models.omnivoice import (
-    OmniVoiceGenerationConfig,
-    _fit_audio_to_duration,
-)
+from omnivoice.models.generation import OmniVoiceGenerationConfig, fit_audio_to_duration
 from omnivoice.serving.batcher import (
     OmniVoiceBatchRequest,
     OmniVoiceBatchResult,
@@ -690,7 +687,7 @@ class StepwiseOmniVoiceScheduler:
                     self.generation_config,
                 )
                 if self.generation_config.enforce_output_duration:
-                    audio = _fit_audio_to_duration(
+                    audio = fit_audio_to_duration(
                         audio,
                         item.requested_duration,
                         self.sample_rate,

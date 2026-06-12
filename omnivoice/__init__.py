@@ -19,10 +19,7 @@ try:
 except PackageNotFoundError:
     __version__ = "0.0.0"
 
-from omnivoice.models.omnivoice import (
-    OmniVoice,
-    OmniVoiceConfig,
-    OmniVoiceGenerationConfig,
-)
+from omnivoice.models.generation import OmniVoiceGenerationConfig
+from omnivoice.models.omnivoice import OmniVoice, OmniVoiceConfig
 
 __all__ = ["OmniVoice", "OmniVoiceConfig", "OmniVoiceGenerationConfig"]

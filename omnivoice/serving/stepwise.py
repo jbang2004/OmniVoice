@@ -16,7 +16,8 @@ from typing import Any, Iterable, Optional
 
 import torch
 
-from omnivoice.models.omnivoice import GenerationTask, OmniVoiceGenerationConfig
+from omnivoice.models.generation import OmniVoiceGenerationConfig
+from omnivoice.models.omnivoice import GenerationTask
 from omnivoice.models.omnivoice import _get_time_steps, _gumbel_sample
 
 

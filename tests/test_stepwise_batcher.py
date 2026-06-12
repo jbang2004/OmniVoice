@@ -5,7 +5,7 @@ from collections import deque
 
 import torch
 
-from omnivoice.models.omnivoice import OmniVoiceGenerationConfig
+from omnivoice.models.generation import OmniVoiceGenerationConfig
 from omnivoice.serving.batcher import OmniVoiceBatchRequest
 from omnivoice.serving.stepwise import (
     StepwiseGenerationState,

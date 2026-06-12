@@ -16,7 +16,8 @@ import soundfile as sf
 import torch
 
 from omnivoice.cli.benchmark_utils import summarize_request_results
-from omnivoice.models.omnivoice import OmniVoice, OmniVoiceGenerationConfig
+from omnivoice.models.generation import OmniVoiceGenerationConfig
+from omnivoice.models.omnivoice import OmniVoice
 from omnivoice.serving.batcher import OmniVoiceBatchRequest
 from omnivoice.serving.stepwise import create_stepwise_states, run_generation_step
 from omnivoice.serving.stepwise_batcher import (
