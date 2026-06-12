@@ -87,6 +87,21 @@ class _PreprocessCountingModel:
         raise AssertionError("_preprocess_all should not be called")
 
 
+class _PromptCountingModel:
+    def __init__(self):
+        self.prompt_calls = []
+
+    def create_voice_clone_prompt(self, ref_audio, ref_text, preprocess_prompt=True):
+        self.prompt_calls.append(
+            {
+                "ref_audio": ref_audio,
+                "ref_text": ref_text,
+                "preprocess_prompt": preprocess_prompt,
+            }
+        )
+        return object()
+
+
 class StepwiseAdmissionTests(unittest.TestCase):
     def setUp(self):
         self.loop = asyncio.new_event_loop()
@@ -574,6 +589,22 @@ class StepwiseAdmissionTests(unittest.TestCase):
         self.loop.run_until_complete(asyncio.sleep(0))
 
         self.assertEqual(future.result(), "ok")
+
+    def test_create_voice_clone_prompt_rejects_non_bool_preprocess_prompt(self):
+        async def run():
+            model = _PromptCountingModel()
+            scheduler = StepwiseOmniVoiceScheduler(model=model)
+
+            with self.assertRaisesRegex(ValueError, "preprocess_prompt must be bool"):
+                await scheduler.create_voice_clone_prompt(
+                    ref_audio="/tmp/ref.wav",
+                    ref_text="reference",
+                    preprocess_prompt="false",
+                )
+
+            self.assertEqual(model.prompt_calls, [])
+
+        self.loop.run_until_complete(run())
 
     def test_running_done_futures_are_dropped(self):
         scheduler = StepwiseOmniVoiceScheduler(model=None)

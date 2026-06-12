@@ -20,7 +20,7 @@ from typing import Any, Callable, Deque, Optional, Sequence
 import numpy as np
 import soundfile as sf
 
-from omnivoice.models.generation import resolve_optional_bool_flags
+from omnivoice.models.generation import ensure_bool, resolve_optional_bool_flags
 from omnivoice.models.omnivoice import VoiceClonePrompt, _ref_audio_tuple_cache_marker
 
 
@@ -377,15 +377,18 @@ class OmniVoiceBatchScheduler:
         cache_key: Optional[tuple[Any, ...]] = None,
     ) -> VoiceClonePrompt:
         if preprocess_prompt is None:
-            preprocess_prompt = bool(
-                self.generation_kwargs.get("preprocess_prompt", True)
+            preprocess_prompt = ensure_bool(
+                self.generation_kwargs.get("preprocess_prompt", True),
+                "preprocess_prompt",
             )
+        else:
+            preprocess_prompt = ensure_bool(preprocess_prompt, "preprocess_prompt")
         return await self._run_control(
             lambda: self._prompt_cache.get_or_create(
                 model=self.model,
                 ref_audio=ref_audio,
                 ref_text=ref_text,
-                preprocess_prompt=bool(preprocess_prompt),
+                preprocess_prompt=preprocess_prompt,
                 cache_key=cache_key,
             )
         )
@@ -1407,7 +1410,10 @@ class OmniVoiceBatchScheduler:
             return request.voice_clone_prompt
         if request.ref_audio is None:
             raise ValueError("voice clone request requires ref_audio or prompt")
-        preprocess_prompt = bool(self.generation_kwargs.get("preprocess_prompt", True))
+        preprocess_prompt = ensure_bool(
+            self.generation_kwargs.get("preprocess_prompt", True),
+            "preprocess_prompt",
+        )
         return self._prompt_cache.get_or_create(
             model=self.model,
             ref_audio=request.ref_audio,

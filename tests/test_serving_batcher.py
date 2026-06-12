@@ -847,6 +847,29 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(queued[0].future.exception(), ValueError)
         self.assertEqual(model.calls, [])
 
+    async def test_invalid_preprocess_prompt_default_fails_before_prompt_cache(self):
+        model = FakeModel()
+        scheduler = OmniVoiceBatchScheduler(
+            model,
+            generation_kwargs={"preprocess_prompt": "false"},
+        )
+        queued = [
+            self._queued(
+                "bad-preprocess",
+                25,
+                mode="clone",
+                ref_audio="/tmp/ref.wav",
+                ref_text="reference",
+            )
+        ]
+
+        scheduler._execute_batch(queued, "full")
+        await asyncio.sleep(0)
+
+        self.assertIsInstance(queued[0].future.exception(), ValueError)
+        self.assertEqual(model.prompt_calls, [])
+        self.assertEqual(model.calls, [])
+
     async def test_failed_batch_updates_failure_metrics_and_clears_running_state(self):
         scheduler = OmniVoiceBatchScheduler(FailingModel())
         queued = self._queued("a", 25)
@@ -1057,6 +1080,19 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
             "omnivoice-batch-scheduler",
         )
         self.assertFalse(model.prompt_calls[0]["preprocess_prompt"])
+
+    async def test_create_voice_clone_prompt_rejects_non_bool_preprocess_prompt(self):
+        model = FakeModel()
+        scheduler = OmniVoiceBatchScheduler(model)
+
+        with self.assertRaisesRegex(ValueError, "preprocess_prompt must be bool"):
+            await scheduler.create_voice_clone_prompt(
+                ref_audio="/tmp/ref.wav",
+                ref_text="reference",
+                preprocess_prompt="false",
+            )
+
+        self.assertEqual(model.prompt_calls, [])
 
     async def test_create_voice_clone_prompt_uses_prompt_cache(self):
         model = FakeModel()

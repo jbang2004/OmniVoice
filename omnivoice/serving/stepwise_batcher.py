@@ -19,6 +19,7 @@ import torch
 
 from omnivoice.models.generation import (
     OmniVoiceGenerationConfig,
+    ensure_bool,
     fit_audio_to_duration,
     resolve_optional_bool_flags,
 )
@@ -208,12 +209,17 @@ class StepwiseOmniVoiceScheduler:
         preprocess_prompt: Optional[bool] = None,
     ) -> Any:
         if preprocess_prompt is None:
-            preprocess_prompt = bool(self.generation_config.preprocess_prompt)
+            preprocess_prompt = ensure_bool(
+                self.generation_config.preprocess_prompt,
+                "preprocess_prompt",
+            )
+        else:
+            preprocess_prompt = ensure_bool(preprocess_prompt, "preprocess_prompt")
         return await self._run_control(
             lambda: self.model.create_voice_clone_prompt(
                 ref_audio=ref_audio,
                 ref_text=ref_text,
-                preprocess_prompt=bool(preprocess_prompt),
+                preprocess_prompt=preprocess_prompt,
             )
         )
 
