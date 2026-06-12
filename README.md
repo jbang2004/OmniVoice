@@ -246,7 +246,7 @@ audio = model.generate(text="He plays the [B EY1 S] guitar while catching a [B A
 
 ## Command-Line Tools
 
-Three CLI entry points are provided. The CLI tools support all features available in the Python API (voice cloning, voice design, auto voice, generation parameters, etc.) — all controlled via command-line arguments.
+Several CLI entry points are provided. The CLI tools support all features available in the Python API (voice cloning, voice design, auto voice, generation parameters, etc.) — all controlled via command-line arguments.
 
 | Command | Description | Source |
 |---|---|---|
@@ -254,6 +254,10 @@ Three CLI entry points are provided. The CLI tools support all features availabl
 | `omnivoice-infer` | Single-item inference | [omnivoice/cli/infer.py](omnivoice/cli/infer.py) |
 | `omnivoice-infer-batch` | Offline batch inference across multiple GPUs | [omnivoice/cli/infer_batch.py](omnivoice/cli/infer_batch.py) |
 | `omnivoice-serve-online-batch` | HTTP server with online micro-batching | [docs/serving.md](docs/serving.md) |
+| `omnivoice-infer-online-batch` | In-process online micro-batch benchmark | [docs/serving.md](docs/serving.md) |
+| `omnivoice-benchmark-http-batch` | Concurrent HTTP load benchmark | [docs/serving.md](docs/serving.md) |
+| `omnivoice-benchmark-http-sweep` | HTTP client load-profile sweep | [docs/serving.md](docs/serving.md) |
+| `omnivoice-benchmark-server-sweep` | Server and client sweep with ranking | [docs/serving.md](docs/serving.md) |
 
 ### Demo
 

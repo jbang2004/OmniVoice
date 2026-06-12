@@ -109,7 +109,8 @@ curl -s http://127.0.0.1:8000/v1/tts \
     "text": "This line should fit exactly into the requested slot.",
     "language_id": "en",
     "voice_id": "speaker-a",
-    "duration": 3.5
+    "duration": 3.5,
+    "enforce_output_duration": true
   }'
 ```
 
@@ -138,6 +139,25 @@ curl -s http://127.0.0.1:8000/v1/tts \
 The online scheduler applies strict duration after model generation per request,
 so strict and non-strict requests can still share the same micro-batch.
 
+## Recommended Inference Path
+
+Use the optimized online batch path as the default resident-GPU runtime:
+
+```bash
+omnivoice-serve-online-batch \
+  --model k2-fsa/OmniVoice \
+  --scheduler_profile balanced12 \
+  --generation_mode optimized \
+  --num_step 32 \
+  --compile_llm true \
+  --enforce_output_duration true
+```
+
+Keep `num_step=32` for production-quality comparisons. Lower values are useful
+for scheduler stress tests, but should not be used to judge final audio quality.
+Use `official_compatible` only when you need an A/B comparison against the
+original item-by-item path.
+
 ## Benchmarking
 
 Use the included server sweep helper to run repeatable load tests:
@@ -156,9 +176,61 @@ The benchmark writes per-profile summaries and uses `/v1/scheduler` plus
 response headers to capture queue wait, batch size, token costs, and generation
 profile data.
 
+Benchmark summaries count a request as successful only when it explicitly
+returns a valid, non-empty WAV. HTTP 200 responses with invalid audio, failed
+requests, malformed metric headers, and per-request scheduler errors are kept in
+`results` as failed rows and excluded from `num_successful`, `audio_s`,
+`rtf_wall`, and request metric distributions. This keeps throughput and RTF
+numbers tied to usable generated audio instead of transport success alone.
+
 For a lighter in-process benchmark without HTTP, use
 `omnivoice-infer-online-batch`. It exposes the same core scheduler controls as
 `omnivoice-serve-online-batch`, including packing policy, model duration
 estimation, split retry, adaptive memory batch caps, and control-queue
 fairness. Keep those flags aligned when comparing CLI benchmark results with
 HTTP serving results.
+
+## Final Validation Checklist
+
+Before treating a serving profile as ready, run the same JSONL through these
+checks and keep the generated WAVs for listening:
+
+```bash
+# 1. Original-compatible baseline
+omnivoice-infer-online-batch \
+  --model k2-fsa/OmniVoice \
+  --test_list validation.jsonl \
+  --res_dir results/original_compatible \
+  --generation_mode official_compatible \
+  --num_step 32 \
+  --concurrency 1 \
+  --enforce_output_duration true
+
+# 2. Optimized in-process scheduler path
+omnivoice-infer-online-batch \
+  --model k2-fsa/OmniVoice \
+  --test_list validation.jsonl \
+  --res_dir results/optimized_online \
+  --generation_mode optimized \
+  --num_step 32 \
+  --concurrency 8 \
+  --enforce_output_duration true
+
+# 3. Resident HTTP server and load sweep
+omnivoice-benchmark-server-sweep \
+  --model k2-fsa/OmniVoice \
+  --test_list validation.jsonl \
+  --res_dir results/server_sweep \
+  --generation_mode optimized \
+  --num_step_values 32 \
+  --client_concurrency_values 1,4,8,16 \
+  --save_wavs true \
+  --client_pre_register_voices true \
+  --enforce_output_duration true
+```
+
+The validation JSONL should include at least: same cloned voice with the same
+text at different `duration` values, different cloned voices, Chinese reference
+voice cloning for non-Chinese target text, and several concurrent short/long
+requests. Compare `num_successful == num_requests`, duration fit, transcription
+consistency, and listening quality before changing scheduler limits again.
