@@ -259,6 +259,11 @@ Several CLI entry points are provided. The CLI tools support all features availa
 | `omnivoice-benchmark-http-sweep` | HTTP client load-profile sweep | [docs/serving.md](docs/serving.md) |
 | `omnivoice-benchmark-server-sweep` | Server and client sweep with ranking | [docs/serving.md](docs/serving.md) |
 
+The step-level continuous-batching prototype is kept under
+`omnivoice.experimental` for research and regression tests. It is not installed
+as a top-level console command because the recommended serving path is
+`omnivoice-serve-online-batch`.
+
 ### Demo
 
 ```bash

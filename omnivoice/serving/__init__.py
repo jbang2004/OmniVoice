@@ -25,19 +25,6 @@ from omnivoice.serving.voice_registry import (
     VoicePromptRegistry,
     VoicePromptRegistrySnapshot,
 )
-from omnivoice.serving.stepwise import (
-    StepwiseGenerationState,
-    StepwiseStepTimings,
-    create_stepwise_states,
-    run_generation_step,
-    run_stepwise_to_completion,
-)
-from omnivoice.serving.stepwise_batcher import (
-    StepwiseOmniVoiceScheduler,
-    StepwiseSchedulerConfig,
-    StepwiseSchedulerSnapshot,
-    build_static_step_shape,
-)
 
 __all__ = [
     "BatchSchedulerConfig",
@@ -55,15 +42,6 @@ __all__ = [
     "recommend_serving_profile",
     "recommended_runtime_config",
     "summarize_workload",
-    "StepwiseGenerationState",
-    "StepwiseStepTimings",
-    "create_stepwise_states",
-    "run_generation_step",
-    "run_stepwise_to_completion",
-    "StepwiseOmniVoiceScheduler",
-    "StepwiseSchedulerConfig",
-    "StepwiseSchedulerSnapshot",
     "VoicePromptRegistry",
     "VoicePromptRegistrySnapshot",
-    "build_static_step_shape",
 ]

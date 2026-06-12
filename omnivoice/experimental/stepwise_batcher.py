@@ -32,7 +32,7 @@ from omnivoice.serving.batcher import (
     OmniVoiceBatchResult,
     _VoiceClonePromptCache,
 )
-from omnivoice.serving.stepwise import (
+from omnivoice.experimental.stepwise import (
     StepwiseGenerationState,
     create_stepwise_states,
     run_generation_step,

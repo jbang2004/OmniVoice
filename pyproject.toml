@@ -64,7 +64,6 @@ eval = [
 omnivoice-infer = "omnivoice.cli.infer:main"
 omnivoice-infer-batch = "omnivoice.cli.infer_batch:main"
 omnivoice-infer-online-batch = "omnivoice.cli.infer_online_batch:main"
-omnivoice-infer-stepwise-online-batch = "omnivoice.cli.infer_stepwise_online_batch:main"
 omnivoice-serve-online-batch = "omnivoice.cli.serve_online_batch:main"
 omnivoice-benchmark-http-batch = "omnivoice.cli.benchmark_http_batch:main"
 omnivoice-benchmark-http-sweep = "omnivoice.cli.benchmark_http_sweep:main"

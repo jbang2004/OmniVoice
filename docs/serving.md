@@ -158,6 +158,28 @@ for scheduler stress tests, but should not be used to judge final audio quality.
 Use `official_compatible` only when you need an A/B comparison against the
 original item-by-item path.
 
+## Runtime Surface
+
+The stable serving surface is intentionally small:
+
+- `omnivoice.serving` exports the request-level online micro-batcher, HTTP app
+  factory, serving profiles, and voice registry.
+- `omnivoice-serve-online-batch` is the recommended resident-GPU server.
+- `omnivoice-infer-online-batch` is the matching in-process benchmark path.
+
+The step-level scheduler prototype lives in `omnivoice.experimental`. It exposes
+the inner diffusion/unmasking loop one step at a time so active requests can be
+repacked between steps. It is useful for continuous-batching research, but local
+benchmarks showed it was slower than request-level online batching on the
+context-outlier workload while keeping GPU utilization high. Keep it out of
+production serving unless a workload-specific benchmark proves an improvement.
+
+You can still run the experimental benchmark directly:
+
+```bash
+python -m omnivoice.experimental.infer_stepwise_online_batch --help
+```
+
 ## Benchmarking
 
 Use the included server sweep helper to run repeatable load tests:

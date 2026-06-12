@@ -59,7 +59,7 @@ from omnivoice.cli.infer_online_batch import (
     _select_representative_warmup_samples,
     get_parser as get_online_parser,
 )
-from omnivoice.cli.infer_stepwise_online_batch import (
+from omnivoice.experimental.infer_stepwise_online_batch import (
     _effective_compile_mode as _stepwise_effective_compile_mode,
     _generation_config_from_args as _stepwise_generation_config_from_args,
     get_parser as get_stepwise_parser,

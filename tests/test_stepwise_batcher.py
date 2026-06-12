@@ -7,12 +7,12 @@ import torch
 
 from omnivoice.models.generation import OmniVoiceGenerationConfig
 from omnivoice.serving.batcher import OmniVoiceBatchRequest
-from omnivoice.serving.stepwise import (
+from omnivoice.experimental.stepwise import (
     StepwiseGenerationState,
     _pack_active_states,
     run_generation_step,
 )
-from omnivoice.serving.stepwise_batcher import (
+from omnivoice.experimental.stepwise_batcher import (
     StepwiseOmniVoiceScheduler,
     StepwiseSchedulerConfig,
     _ControlRequest,
