@@ -1221,6 +1221,17 @@ class BenchmarkUtilsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "id or save_name"):
             _online_request_from_sample({"text": "hello"})
 
+    def test_online_request_from_sample_defaults_null_priority(self):
+        request = _online_request_from_sample(
+            {
+                "id": "r1",
+                "text": "hello",
+                "priority": None,
+            }
+        )
+
+        self.assertEqual(request.priority, "normal")
+
     def test_scheduler_aware_warmup_fill_respects_target_token_cap(self):
         samples = [
             {
@@ -1808,6 +1819,17 @@ class BenchmarkUtilsTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "id or save_name"):
             _stepwise_request_from_sample({"text": "hello"})
+
+    def test_stepwise_request_from_sample_defaults_null_priority(self):
+        request = _stepwise_request_from_sample(
+            {
+                "id": "r1",
+                "text": "hello",
+                "priority": None,
+            }
+        )
+
+        self.assertEqual(request.priority, "normal")
 
     def test_read_test_list_preserves_serving_fields(self):
         row = {
