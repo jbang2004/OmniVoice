@@ -79,7 +79,9 @@ def get_parser():
         '"instruct" (str): instruction for voice design (used when ref_audio is absent); '
         '"language_id" (str): language code, e.g. "en"; '
         '"duration" (float): target duration in seconds; '
-        '"speed" (float): speaking speed multiplier. '
+        '"speed" (float): speaking speed multiplier; '
+        '"enforce_output_duration" (bool): crop or pad the final waveform '
+        "to the requested duration. "
         "Only id and text are required; all other fields are optional.",
     )
     parser.add_argument(
@@ -325,7 +327,7 @@ def _sort_samples_by_duration(
     """Return (sample, total_duration) pairs sorted by duration descending."""
     sample_with_duration = []
     for sample in samples:
-        _, ref_text, ref_audio_path, text, _, dur, _, _ = sample
+        _, ref_text, ref_audio_path, text, _, dur, _, _, _ = sample
         total_duration = estimate_sample_total_duration(
             duration_estimator, text, ref_text, ref_audio_path, gen_duration=dur
         )
@@ -399,9 +401,20 @@ def run_inference_batch(
     durations = []
     speeds = []
     instructs = []
+    enforce_output_durations = []
 
     for sample in batch_samples:
-        save_name, ref_text, ref_audio_path, text, lang_id, dur, spd, instruct = sample
+        (
+            save_name,
+            ref_text,
+            ref_audio_path,
+            text,
+            lang_id,
+            dur,
+            spd,
+            instruct,
+            enforce_duration,
+        ) = sample
         save_names.append(save_name)
         ref_texts.append(ref_text)
         ref_audio_paths.append(ref_audio_path)
@@ -410,6 +423,17 @@ def run_inference_batch(
         durations.append(dur)
         speeds.append(spd)
         instructs.append(instruct)
+        enforce_output_durations.append(enforce_duration)
+
+    gen_kwargs = dict(gen_kwargs)
+    default_enforce_output_duration = gen_kwargs.pop("enforce_output_duration", None)
+    if any(value is not None for value in enforce_output_durations):
+        enforce_output_duration = [
+            default_enforce_output_duration if value is None else value
+            for value in enforce_output_durations
+        ]
+    else:
+        enforce_output_duration = default_enforce_output_duration
 
     start_time = time.time()
     audios = worker_model.generate(
@@ -420,6 +444,7 @@ def run_inference_batch(
         duration=durations if any(d is not None for d in durations) else None,
         speed=speeds if any(s is not None for s in speeds) else None,
         instruct=instructs if any(i is not None for i in instructs) else None,
+        enforce_output_duration=enforce_output_duration,
         **gen_kwargs,
     )
     batch_synth_time = time.time() - start_time
@@ -480,6 +505,7 @@ def main():
                 s.get("duration"),
                 s.get("speed"),
                 s.get("instruct"),
+                s.get("enforce_output_duration"),
             )
         )
 

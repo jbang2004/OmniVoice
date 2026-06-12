@@ -46,13 +46,13 @@ audio = model.generate(text="Hello, this is a test of duration control", speed=1
 |---|---|---|---|
 | `duration` | float or list[float \| None] | None | Fixed output duration in seconds. Overrides `speed` when set. |
 | `speed` | float or list[float \| None] | None | Speed factor. Values > 1.0 produce shorter audio (faster); values < 1.0 produce longer audio (slower). Ignored when `duration` is set. Defaults to 1.0 when both are None. |
-| `enforce_output_duration` | bool | False | If `duration` is provided, crop or right-pad the final waveform after post-processing so the returned audio length exactly matches the requested duration. |
+| `enforce_output_duration` | bool or list[bool \| None] | False | If `duration` is provided, crop or right-pad the final waveform after post-processing so the returned audio length exactly matches the requested duration. |
 
 Priority: `duration` > `speed`.
 
 `duration` controls the target number of generated audio tokens. The default post-processing step may still trim trailing silence, so the final waveform can be slightly shorter than the requested duration. If you need the returned audio to exactly fit a time slot, set `enforce_output_duration=True`.
 
-In batch mode, `duration` and `speed` may be scalars, lists with one item, or lists with the same length as `text`. Values must be positive numbers or `None`.
+In batch mode, `duration`, `speed`, and `enforce_output_duration` may be scalars, lists with one item, or lists with the same length as `text`. Numeric values must be positive numbers or `None`; `None` entries in `enforce_output_duration` inherit the config default.
 
 ```python
 audio = model.generate(

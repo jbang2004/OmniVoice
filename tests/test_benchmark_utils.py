@@ -25,6 +25,7 @@ from omnivoice.cli.benchmark_http_sweep import (
     _compact_result,
     _reset_url_from_scheduler_url,
 )
+from omnivoice.cli import infer_batch as infer_batch_cli
 from omnivoice.cli.benchmark_server_sweep import (
     _build_server_command,
     _compact_server_result,
@@ -884,6 +885,63 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(samples[0]["duration"], 2.4)
         self.assertEqual(samples[1]["duration"], 0.8)
         self.assertEqual({sample["ref_audio"] for sample in samples}, {"/tmp/ref.wav"})
+
+    def test_infer_batch_merges_sample_strict_duration_with_cli_default(self):
+        class FakeBatchModel:
+            sampling_rate = 1000
+
+            def __init__(self):
+                self.kwargs = None
+
+            def generate(self, **kwargs):
+                self.kwargs = kwargs
+                return [
+                    np.zeros(10, dtype=np.float32)
+                    for _ in kwargs["text"]
+                ]
+
+        model = FakeBatchModel()
+        original_model = infer_batch_cli.worker_model
+        infer_batch_cli.worker_model = model
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                results = infer_batch_cli.run_inference_batch(
+                    [
+                        (
+                            "a",
+                            None,
+                            None,
+                            "first",
+                            "en",
+                            0.01,
+                            None,
+                            None,
+                            False,
+                        ),
+                        (
+                            "b",
+                            None,
+                            None,
+                            "second",
+                            "en",
+                            0.02,
+                            None,
+                            None,
+                            None,
+                        ),
+                    ],
+                    tmpdir,
+                    enforce_output_duration=True,
+                    postprocess_output=False,
+                )
+        finally:
+            infer_batch_cli.worker_model = original_model
+
+        self.assertEqual(
+            model.kwargs["enforce_output_duration"],
+            [False, True],
+        )
+        self.assertEqual([result[0] for result in results], ["a", "b"])
 
     def test_heterogeneous_generator_can_create_context_outliers(self):
         args = argparse.Namespace(

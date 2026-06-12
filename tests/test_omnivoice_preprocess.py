@@ -118,6 +118,33 @@ class OmniVoicePreprocessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "speed values must be positive"):
             model._preprocess_all(text="hello", speed=-1)
 
+    def test_enforce_output_duration_flags_support_per_item_override(self):
+        model = _bare_model()
+
+        self.assertEqual(
+            model._resolve_enforce_output_duration_flags(None, 2, default=True),
+            [True, True],
+        )
+        self.assertEqual(
+            model._resolve_enforce_output_duration_flags(
+                [False, None],
+                2,
+                default=True,
+            ),
+            [False, True],
+        )
+        self.assertEqual(
+            model._resolve_enforce_output_duration_flags([True], 2, default=False),
+            [True, True],
+        )
+
+        with self.assertRaisesRegex(ValueError, "enforce_output_duration.*batch size 2"):
+            model._resolve_enforce_output_duration_flags(
+                [True, False, True],
+                2,
+                default=False,
+            )
+
     def test_ref_text_none_expands_for_multiple_ref_audios(self):
         model = _bare_model()
         calls = []

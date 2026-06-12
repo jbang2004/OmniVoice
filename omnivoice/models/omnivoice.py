@@ -781,6 +781,7 @@ class OmniVoice(PreTrainedModel):
         instruct: Union[str, list[str], None] = None,
         duration: Union[float, list[Optional[float]], None] = None,
         speed: Union[float, list[Optional[float]], None] = None,
+        enforce_output_duration: Union[bool, list[Optional[bool]], None] = None,
         generation_config: Optional[OmniVoiceGenerationConfig] = None,
         **kwargs,
     ) -> list[np.ndarray]:
@@ -813,6 +814,9 @@ class OmniVoice(PreTrainedModel):
             speed: Speaking speed factor. ``> 1.0`` for faster, ``< 1.0`` for
                 slower. If a list, one value per item. ``None`` (default) uses
                 the model's default estimation.
+            enforce_output_duration: If provided, overrides
+                ``generation_config.enforce_output_duration``. Accepts a bool
+                or a per-item list. ``None`` items inherit the config default.
             generation_config: Explicit config object. If provided, takes
                 precedence over ``**kwargs``.
             **kwargs: Generation config or its fields:
@@ -837,9 +841,9 @@ class OmniVoice(PreTrainedModel):
                     in one tokenizer call. This improves throughput but can
                     introduce tiny floating-point differences versus per-item
                     decode, so it is opt-in for the base ``generate`` API.
-                enforce_output_duration: If ``duration`` is provided, crop or
-                    right-pad the final waveform after post-processing so the
-                    returned audio length matches the requested duration.
+                enforce_output_duration: Default output-duration enforcement
+                    for all items when the explicit ``enforce_output_duration``
+                    argument is omitted or contains ``None`` entries.
         Returns:
             ``audios`` a list of 1-D ``np.ndarray`` with shape ``(T,)`` and
             sampling rate consistent with the model's audio tokenizer
@@ -878,6 +882,11 @@ class OmniVoice(PreTrainedModel):
                     speed=speed,
                     duration=duration,
                 )
+            enforce_output_duration_flags = self._resolve_enforce_output_duration_flags(
+                enforce_output_duration,
+                full_task.batch_size,
+                default=gen_config.enforce_output_duration,
+            )
             profile.metadata.update(
                 {
                     "batch_size": full_task.batch_size,
@@ -889,7 +898,8 @@ class OmniVoice(PreTrainedModel):
                     "num_step": gen_config.num_step,
                     "batched_decode": gen_config.batched_decode,
                     "reuse_static_input_embeds": gen_config.reuse_static_input_embeds,
-                    "enforce_output_duration": gen_config.enforce_output_duration,
+                    "enforce_output_duration": any(enforce_output_duration_flags),
+                    "enforce_output_duration_flags": list(enforce_output_duration_flags),
                     "postprocess_output": gen_config.postprocess_output,
                 }
             )
@@ -943,12 +953,15 @@ class OmniVoice(PreTrainedModel):
                             )
                         )
 
-                if gen_config.enforce_output_duration:
+                if any(enforce_output_duration_flags):
                     generated_audios = [
                         fit_audio_to_duration(audio, target_duration_s, self.sampling_rate)
-                        for audio, target_duration_s in zip(
+                        if enforce_duration
+                        else audio
+                        for audio, target_duration_s, enforce_duration in zip(
                             generated_audios,
                             full_task.requested_durations or [None] * full_task.batch_size,
+                            enforce_output_duration_flags,
                         )
                     ]
 
@@ -1563,6 +1576,42 @@ class OmniVoice(PreTrainedModel):
             if numeric <= 0:
                 raise ValueError(f"{name} values must be positive numbers or None")
         return [None if value is None else float(value) for value in values]
+
+    @staticmethod
+    def _ensure_optional_bool_list(
+        x: Union[bool, list[Optional[bool]], None],
+        batch_size: int,
+        name: str,
+    ) -> Optional[List[Optional[bool]]]:
+        if x is None:
+            return None
+        if isinstance(x, bool):
+            return [x] * batch_size
+        values = list(x)
+        if len(values) not in (1, batch_size):
+            raise ValueError(
+                f"{name} should be a bool or a list with length 1 or batch "
+                f"size {batch_size}, but got {len(values)}"
+            )
+        if len(values) == 1:
+            values = values * batch_size
+        return [None if value is None else bool(value) for value in values]
+
+    def _resolve_enforce_output_duration_flags(
+        self,
+        enforce_output_duration: Union[bool, list[Optional[bool]], None],
+        batch_size: int,
+        *,
+        default: bool,
+    ) -> List[bool]:
+        values = self._ensure_optional_bool_list(
+            enforce_output_duration,
+            batch_size,
+            "enforce_output_duration",
+        )
+        if values is None:
+            return [bool(default)] * batch_size
+        return [bool(default) if value is None else bool(value) for value in values]
 
     @staticmethod
     def _voice_clone_prompt_cache_key(
