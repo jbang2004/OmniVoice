@@ -28,13 +28,16 @@ This is the main entry point for both inference and training:
 """
 
 import difflib
+import hashlib
 import logging
 import math
 import os
 import re
-from dataclasses import dataclass, fields
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass, field, fields
 from functools import partial
-from typing import Any, List, Optional, Union
+from typing import Any, Iterator, List, Optional, Union
 
 import numpy as np
 import torch
@@ -82,6 +85,16 @@ from omnivoice.utils.voice_design import (
 logger = logging.getLogger(__name__)
 
 
+def _module_device(module: nn.Module) -> torch.device:
+    try:
+        return torch.device(module.device)
+    except AttributeError:
+        try:
+            return next(module.parameters()).device
+        except (AttributeError, StopIteration):
+            return torch.device("cpu")
+
+
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
@@ -92,6 +105,61 @@ class VoiceClonePrompt:
     ref_audio_tokens: torch.Tensor  # (C, T)
     ref_text: str
     ref_rms: float
+
+
+@dataclass
+class _GenerationProfiler:
+    enabled: bool
+    device: Union[torch.device, str]
+    timings_s: dict[str, float] = field(default_factory=dict)
+    counts: dict[str, int] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def _sync(self) -> None:
+        if not self.enabled:
+            return
+        device = torch.device(self.device)
+        if device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(device)
+        elif device.type == "mps" and hasattr(torch, "mps"):
+            synchronize = getattr(torch.mps, "synchronize", None)
+            if synchronize is not None:
+                synchronize()
+
+    @contextmanager
+    def section(self, name: str, *, sync: bool = False) -> Iterator[None]:
+        if not self.enabled:
+            yield
+            return
+        if sync:
+            self._sync()
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            if sync:
+                self._sync()
+            self.timings_s[name] = self.timings_s.get(name, 0.0) + (
+                time.perf_counter() - started
+            )
+            self.counts[name] = self.counts.get(name, 0) + 1
+
+    def to_dict(self) -> dict[str, Any]:
+        if not self.enabled:
+            return {}
+        total_s = self.timings_s.get("total_s", 0.0)
+        percentages = {
+            name: (value / total_s * 100.0)
+            for name, value in self.timings_s.items()
+            if total_s > 0 and name != "total_s"
+        }
+        return {
+            "timings_s": dict(sorted(self.timings_s.items())),
+            "percentages": dict(sorted(percentages.items())),
+            "counts": dict(sorted(self.counts.items())),
+            "metadata": self.metadata,
+            "sync_profile": True,
+        }
 
 
 @dataclass
@@ -107,12 +175,72 @@ class OmniVoiceGenerationConfig:
     postprocess_output: bool = True
     audio_chunk_duration: float = 15.0
     audio_chunk_threshold: float = 30.0
+    batched_decode: bool = False
+    batch_size_pad: Optional[int] = None
+    seq_len_bucket_multiple: int = 1
+    target_len_bucket_multiple: int = 1
+    collect_profile: bool = False
+    split_guidance_forward: Union[bool, str] = "auto"
+    split_guidance_min_batch_size: int = 8
+    split_guidance_min_saved_context_ratio: float = 0.25
+    reuse_static_input_embeds: bool = True
 
     @classmethod
     def from_dict(cls, kwargs_dict):
         valid_keys = {f.name for f in fields(cls)}
         filtered = {k: v for k, v in kwargs_dict.items() if k in valid_keys}
         return cls(**filtered)
+
+
+def _ref_audio_tuple_cache_marker(ref_audio: Any) -> Optional[tuple[Any, ...]]:
+    """Return a stable-ish cache marker for in-memory ``(waveform, sr)`` audio."""
+    if not isinstance(ref_audio, tuple) or len(ref_audio) < 2:
+        return None
+    waveform, sample_rate = ref_audio[0], ref_audio[1]
+    try:
+        sample_rate = int(sample_rate)
+    except (TypeError, ValueError):
+        return None
+
+    marker = _waveform_cache_marker(waveform)
+    if marker is None:
+        return None
+    return ("tuple", sample_rate, marker)
+
+
+def _waveform_cache_marker(waveform: Any) -> Optional[tuple[Any, ...]]:
+    shape = getattr(waveform, "shape", None)
+    dtype = getattr(waveform, "dtype", None)
+    if shape is None or dtype is None:
+        return None
+    shape_tuple = tuple(int(dim) for dim in shape)
+    dtype_name = str(dtype)
+
+    if isinstance(waveform, np.ndarray):
+        array = np.ascontiguousarray(waveform)
+        digest = hashlib.sha256(array.view(np.uint8)).hexdigest()
+        return ("numpy", shape_tuple, dtype_name, digest)
+
+    if isinstance(waveform, torch.Tensor):
+        tensor = waveform.detach()
+        device = str(tensor.device)
+        if tensor.device.type == "cpu":
+            array = tensor.contiguous().numpy()
+            digest = hashlib.sha256(np.ascontiguousarray(array).view(np.uint8)).hexdigest()
+            return ("torch-cpu", shape_tuple, dtype_name, digest)
+        data_ptr = int(tensor.data_ptr()) if tensor.numel() > 0 else 0
+        version = int(getattr(tensor, "_version", 0))
+        return (
+            "torch-device",
+            id(waveform),
+            device,
+            shape_tuple,
+            dtype_name,
+            data_ptr,
+            version,
+        )
+
+    return None
 
 
 @dataclass
@@ -460,6 +588,185 @@ class OmniVoice(PreTrainedModel):
             logits=audio_logits,
         )
 
+    def _forward_audio_logits_for_slices(
+        self,
+        input_ids: torch.LongTensor,
+        audio_mask: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+        target_slices: List[tuple[int, int]],
+        inputs_embeds: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        target_len_pad: Optional[int] = None,
+        target_index: Optional[torch.LongTensor] = None,
+        target_valid_mask: Optional[torch.Tensor] = None,
+        bidirectional_no_mask: bool = False,
+        profile: Optional[_GenerationProfiler] = None,
+    ) -> torch.Tensor:
+        """Run the LLM and project logits only for requested audio positions.
+
+        Generation only consumes logits for the masked target-audio span, but
+        ``forward()`` projects every hidden state through ``audio_heads``.  The
+        projection is wide (num_codebooks * audio_vocab_size), so avoiding text
+        and reference-audio positions removes avoidable work from every
+        diffusion step while keeping the LLM context unchanged.
+        """
+        if profile is None:
+            profile = _GenerationProfiler(enabled=False, device=_module_device(self))
+        if len(target_slices) != input_ids.size(0):
+            raise ValueError("target_slices must match batch size")
+
+        with profile.section("forward_prepare_embeds_s", sync=True):
+            if inputs_embeds is None:
+                inputs_embeds = self._prepare_embed_inputs(input_ids, audio_mask)
+            elif (
+                inputs_embeds.size(0) != input_ids.size(0)
+                or inputs_embeds.size(1) != input_ids.size(-1)
+            ):
+                raise ValueError("inputs_embeds must match input_ids batch and length")
+        with profile.section("forward_llm_s", sync=True):
+            llm_attention_mask: Optional[Union[torch.Tensor, dict[str, None]]]
+            llm_attention_mask = attention_mask
+            llm_kwargs: dict[str, Any] = {}
+            if bidirectional_no_mask:
+                # OmniVoice iterative decoding intentionally uses bidirectional
+                # attention over the diffusion target span. When a branch has
+                # no padding, a dense all-true 4D mask is equivalent to no mask
+                # plus is_causal=False, and avoids forcing SDPA down a custom
+                # mask path.
+                llm_attention_mask = {
+                    "full_attention": None,
+                    "sliding_attention": None,
+                }
+                llm_kwargs["is_causal"] = False
+            llm_outputs = self.llm(
+                inputs_embeds=inputs_embeds,
+                attention_mask=llm_attention_mask,
+                return_dict=True,
+                position_ids=position_ids,
+                **llm_kwargs,
+            )
+            hidden_states = llm_outputs[0]
+
+        with profile.section("forward_select_targets_s", sync=True):
+            if target_index is None or target_valid_mask is None:
+                target_index, target_valid_mask = self._build_target_slice_gather_index(
+                    target_slices=target_slices,
+                    source_len=hidden_states.size(1),
+                    target_len_pad=target_len_pad,
+                    device=hidden_states.device,
+                )
+            elif target_index.size(0) != hidden_states.size(0):
+                raise ValueError("target_index must match batch size")
+
+            selected = hidden_states.gather(
+                1,
+                target_index.unsqueeze(-1).expand(-1, -1, hidden_states.size(-1)),
+            )
+            selected = selected.masked_fill(~target_valid_mask.unsqueeze(-1), 0)
+
+        with profile.section("forward_audio_heads_s", sync=True):
+            logits_flat = self.audio_heads(selected)
+            batch_size, seq_len, _ = logits_flat.shape
+            return logits_flat.view(
+                batch_size,
+                seq_len,
+                self.config.num_audio_codebook,
+                self.config.audio_vocab_size,
+            ).permute(0, 2, 1, 3)
+
+    def _build_target_slice_gather_index(
+        self,
+        *,
+        target_slices: List[tuple[int, int]],
+        source_len: int,
+        target_len_pad: Optional[int] = None,
+        device: Optional[torch.device] = None,
+    ) -> tuple[torch.LongTensor, torch.Tensor]:
+        lengths = [end - start for start, end in target_slices]
+        max_len = max(lengths)
+        if target_len_pad is not None:
+            if target_len_pad < max_len:
+                raise ValueError("target_len_pad must be >= max target slice length")
+            max_len = target_len_pad
+
+        starts = []
+        for start, end in target_slices:
+            if start < 0 or end < start or end > source_len:
+                raise ValueError("target_slices must be within hidden-state length")
+            starts.append(start)
+
+        device = device or self.device
+        starts_t = torch.tensor(starts, dtype=torch.long, device=device)
+        lengths_t = torch.tensor(lengths, dtype=torch.long, device=device)
+        offsets = torch.arange(max_len, dtype=torch.long, device=device).unsqueeze(0)
+        target_index = starts_t.unsqueeze(1) + offsets
+        target_valid_mask = offsets < lengths_t.unsqueeze(1)
+        target_index = target_index.clamp(max=max(source_len - 1, 0))
+        return target_index, target_valid_mask
+
+    def _refresh_target_audio_embeds(
+        self,
+        *,
+        inputs_embeds: torch.Tensor,
+        input_ids: torch.LongTensor,
+        target_index: torch.LongTensor,
+        target_valid_mask: torch.Tensor,
+    ) -> None:
+        """Refresh cached input embeddings for target-audio positions only."""
+        if target_index.size(0) != input_ids.size(0):
+            raise ValueError("target_index must match input_ids batch size")
+        if inputs_embeds.size(0) != input_ids.size(0):
+            raise ValueError("inputs_embeds must match input_ids batch size")
+
+        codebooks = input_ids.size(1)
+        target_ids = input_ids.gather(
+            2,
+            target_index.unsqueeze(1).expand(-1, codebooks, -1),
+        )
+        safe_target_ids = target_ids.masked_fill(
+            ~target_valid_mask.unsqueeze(1),
+            self.config.audio_mask_id,
+        )
+        shifted_ids = safe_target_ids + self.codebook_layer_offsets.view(1, -1, 1)
+        refreshed = self.audio_embeddings(shifted_ids).sum(dim=1)
+
+        embed_index = target_index.unsqueeze(-1).expand(
+            -1,
+            -1,
+            inputs_embeds.size(-1),
+        )
+        if not bool(target_valid_mask.all()):
+            current = inputs_embeds.gather(1, embed_index)
+            refreshed = torch.where(
+                target_valid_mask.unsqueeze(-1),
+                refreshed,
+                current,
+            )
+        inputs_embeds.scatter_(1, embed_index, refreshed)
+
+    def _refresh_sparse_audio_embeds(
+        self,
+        *,
+        inputs_embeds: torch.Tensor,
+        input_ids: torch.LongTensor,
+        batch_rows: torch.LongTensor,
+        seq_positions: torch.LongTensor,
+    ) -> None:
+        """Refresh cached input embeddings for selected audio positions only."""
+        if batch_rows.numel() == 0:
+            return
+        if batch_rows.shape != seq_positions.shape:
+            raise ValueError("batch_rows and seq_positions must have the same shape")
+        if inputs_embeds.size(0) != input_ids.size(0):
+            raise ValueError("inputs_embeds must match input_ids batch size")
+
+        flat_rows = batch_rows.reshape(-1)
+        flat_positions = seq_positions.reshape(-1)
+        token_ids = input_ids[flat_rows, :, flat_positions]
+        shifted_ids = token_ids + self.codebook_layer_offsets.view(1, -1)
+        refreshed = self.audio_embeddings(shifted_ids).sum(dim=1)
+        inputs_embeds[flat_rows, flat_positions, :] = refreshed
+
     def supported_language_ids(self) -> set[str]:
         """Return a list of supported language IDs."""
         return LANG_IDS
@@ -539,6 +846,10 @@ class OmniVoice(PreTrainedModel):
                     this duration (seconds) and generate chunk by chunk.
                 audio_chunk_threshold: Only apply chunking if estimated audio
                     duration exceeds this threshold (seconds).
+                batched_decode: Decode equal-length, non-chunked batch outputs
+                    in one tokenizer call. This improves throughput but can
+                    introduce tiny floating-point differences versus per-item
+                    decode, so it is opt-in for the base ``generate`` API.
         Returns:
             ``audios`` a list of 1-D ``np.ndarray`` with shape ``(T,)`` and
             sampling rate consistent with the model's audio tokenizer
@@ -556,48 +867,89 @@ class OmniVoice(PreTrainedModel):
             if generation_config is not None
             else OmniVoiceGenerationConfig.from_dict(kwargs)
         )
-
-        self.eval()
-
-        full_task = self._preprocess_all(
-            text=text,
-            language=language,
-            ref_text=ref_text,
-            ref_audio=ref_audio,
-            voice_clone_prompt=voice_clone_prompt,
-            instruct=instruct,
-            preprocess_prompt=gen_config.preprocess_prompt,
-            speed=speed,
-            duration=duration,
+        profile = _GenerationProfiler(
+            enabled=bool(gen_config.collect_profile),
+            device=_module_device(self),
         )
+        self.last_generation_profile = None
 
-        short_idx, long_idx = full_task.get_indices(
-            gen_config, self.audio_tokenizer.config.frame_rate
-        )
+        with profile.section("total_s", sync=gen_config.collect_profile):
+            self.eval()
 
-        results = [None] * full_task.batch_size
-
-        if short_idx:
-            short_task = full_task.slice_task(short_idx)
-            short_results = self._generate_iterative(short_task, gen_config)
-            for idx, res in zip(short_idx, short_results):
-                results[idx] = res
-
-        if long_idx:
-            long_task = full_task.slice_task(long_idx)
-            long_results = self._generate_chunked(long_task, gen_config)
-            for idx, res in zip(long_idx, long_results):
-                results[idx] = res
-
-        generated_audios = []
-        for i in range(full_task.batch_size):
-            assert results[i] is not None, f"Result {i} was not generated"
-            generated_audios.append(
-                self._decode_and_post_process(
-                    results[i], full_task.ref_rms[i], gen_config  # type: ignore[arg-type]
+            with profile.section("preprocess_s"):
+                full_task = self._preprocess_all(
+                    text=text,
+                    language=language,
+                    ref_text=ref_text,
+                    ref_audio=ref_audio,
+                    voice_clone_prompt=voice_clone_prompt,
+                    instruct=instruct,
+                    preprocess_prompt=gen_config.preprocess_prompt,
+                    speed=speed,
+                    duration=duration,
                 )
+            profile.metadata.update(
+                {
+                    "batch_size": full_task.batch_size,
+                    "target_lens": list(full_task.target_lens),
+                    "total_target_tokens": int(sum(full_task.target_lens)),
+                    "max_target_tokens": int(max(full_task.target_lens, default=0)),
+                    "num_step": gen_config.num_step,
+                    "batched_decode": gen_config.batched_decode,
+                    "postprocess_output": gen_config.postprocess_output,
+                }
             )
 
+            short_idx, long_idx = full_task.get_indices(
+                gen_config, self.audio_tokenizer.config.frame_rate
+            )
+            profile.metadata["short_batch_size"] = len(short_idx)
+            profile.metadata["long_batch_size"] = len(long_idx)
+
+            results = [None] * full_task.batch_size
+
+            if short_idx:
+                short_task = full_task.slice_task(short_idx)
+                with profile.section("short_iterative_s", sync=True):
+                    short_results = self._generate_iterative(
+                        short_task,
+                        gen_config,
+                        profile=profile,
+                    )
+                for idx, res in zip(short_idx, short_results):
+                    results[idx] = res
+
+            if long_idx:
+                long_task = full_task.slice_task(long_idx)
+                with profile.section("long_chunked_s", sync=True):
+                    long_results = self._generate_chunked(long_task, gen_config)
+                for idx, res in zip(long_idx, long_results):
+                    results[idx] = res
+
+            for i in range(full_task.batch_size):
+                assert results[i] is not None, f"Result {i} was not generated"
+
+            with profile.section("decode_and_postprocess_s", sync=True):
+                if gen_config.batched_decode:
+                    generated_audios = self._decode_batch_and_post_process(
+                        results,  # type: ignore[arg-type]
+                        full_task.ref_rms,
+                        gen_config,
+                        profile=profile,
+                    )
+                else:
+                    generated_audios = []
+                    for i in range(full_task.batch_size):
+                        generated_audios.append(
+                            self._decode_and_post_process(
+                                results[i],  # type: ignore[arg-type]
+                                full_task.ref_rms[i],
+                                gen_config,
+                                profile=profile,
+                            )
+                        )
+
+        self.last_generation_profile = profile.to_dict()
         return generated_audios
 
     def create_voice_clone_prompt(
@@ -712,6 +1064,7 @@ class OmniVoice(PreTrainedModel):
         tokens: Union[torch.Tensor, List[torch.Tensor]],
         rms: Union[float, None],
         gen_config: OmniVoiceGenerationConfig,
+        profile: Optional[_GenerationProfiler] = None,
     ) -> np.ndarray:
         """
         Args:
@@ -722,30 +1075,140 @@ class OmniVoice(PreTrainedModel):
         Returns:
             Decoded and post-processed audio array of shape (T,).
         """
+        if profile is None:
+            profile = _GenerationProfiler(enabled=False, device=_module_device(self))
         tokenizer_device = self.audio_tokenizer.device
         if isinstance(tokens, list):
-            chunk_audios = [
-                self.audio_tokenizer.decode(t.to(tokenizer_device).unsqueeze(0))
-                .audio_values[0]
-                .cpu()
-                .numpy()
-                for t in tokens
-            ]
-            audio_waveform = cross_fade_chunks(chunk_audios, self.sampling_rate)
+            chunk_audios = []
+            for t in tokens:
+                with profile.section("decode_tokenizer_s", sync=True):
+                    chunk_audios.append(
+                        self.audio_tokenizer.decode(t.to(tokenizer_device).unsqueeze(0))
+                        .audio_values[0]
+                        .cpu()
+                        .numpy()
+                    )
+            with profile.section("decode_chunk_crossfade_s"):
+                audio_waveform = cross_fade_chunks(chunk_audios, self.sampling_rate)
         else:
-            audio_waveform = (
-                self.audio_tokenizer.decode(tokens.to(tokenizer_device).unsqueeze(0))
-                .audio_values[0]
-                .cpu()
-                .numpy()
-            )
+            with profile.section("decode_tokenizer_s", sync=True):
+                audio_waveform = (
+                    self.audio_tokenizer.decode(tokens.to(tokenizer_device).unsqueeze(0))
+                    .audio_values[0]
+                    .cpu()
+                    .numpy()
+                )
 
-        audio_waveform = self._post_process_audio(
-            audio_waveform,
-            postprocess_output=gen_config.postprocess_output,
-            ref_rms=rms,
-        )
+        with profile.section("postprocess_audio_s"):
+            audio_waveform = self._post_process_audio(
+                audio_waveform,
+                postprocess_output=gen_config.postprocess_output,
+                ref_rms=rms,
+            )
         return audio_waveform.squeeze(0)
+
+    def _decode_batch_and_post_process(
+        self,
+        results: List[Union[torch.Tensor, List[torch.Tensor]]],
+        rms_list: List[Union[float, None]],
+        gen_config: OmniVoiceGenerationConfig,
+        profile: Optional[_GenerationProfiler] = None,
+    ) -> List[np.ndarray]:
+        """Decode generated token results, batching equal-length tensors.
+
+        The audio tokenizer accepts batched code tensors, but padding unequal
+        lengths can slightly change tail samples.  To keep the output contract
+        close, this helper only batches tensors with the exact same token
+        length. Chunked generations are decoded by equal-length chunk groups,
+        then reassembled per item before the existing crossfade/postprocess
+        path.
+        """
+        if profile is None:
+            profile = _GenerationProfiler(enabled=False, device=_module_device(self))
+        if len(results) != len(rms_list):
+            raise ValueError("results and rms_list must have the same length")
+
+        decoded: List[Optional[np.ndarray]] = [None] * len(results)
+        groups: dict[int, list[int]] = {}
+        chunk_groups: dict[int, list[tuple[int, int, torch.Tensor]]] = {}
+        chunk_audios: dict[int, list[Optional[np.ndarray]]] = {}
+
+        with profile.section("decode_grouping_s"):
+            for i, tokens in enumerate(results):
+                if isinstance(tokens, list):
+                    chunk_audios[i] = [None] * len(tokens)
+                    for chunk_idx, chunk_tokens in enumerate(tokens):
+                        chunk_groups.setdefault(int(chunk_tokens.size(-1)), []).append(
+                            (i, chunk_idx, chunk_tokens)
+                        )
+                    continue
+                groups.setdefault(int(tokens.size(-1)), []).append(i)
+
+        tokenizer_device = self.audio_tokenizer.device
+        for entries in chunk_groups.values():
+            with profile.section("decode_stack_tokens_s", sync=True):
+                batch_tokens = torch.stack(
+                    [chunk_tokens.to(tokenizer_device) for _, _, chunk_tokens in entries],
+                    dim=0,
+                )
+            with profile.section("decode_tokenizer_s", sync=True):
+                batch_audio = self.audio_tokenizer.decode(batch_tokens).audio_values
+            for local_idx, (result_idx, chunk_idx, _) in enumerate(entries):
+                chunk_audios[result_idx][chunk_idx] = (
+                    batch_audio[local_idx].cpu().numpy()
+                )
+
+        for result_idx, chunks in chunk_audios.items():
+            assert all(chunk is not None for chunk in chunks), (
+                f"Decoded chunks for item {result_idx} are incomplete"
+            )
+            with profile.section("decode_chunk_crossfade_s"):
+                audio_waveform = cross_fade_chunks(
+                    chunks,  # type: ignore[arg-type]
+                    self.sampling_rate,
+                )
+            with profile.section("postprocess_audio_s"):
+                audio_waveform = self._post_process_audio(
+                    audio_waveform,
+                    postprocess_output=gen_config.postprocess_output,
+                    ref_rms=rms_list[result_idx],
+                )
+            decoded[result_idx] = audio_waveform.squeeze(0)
+
+        for indices in groups.values():
+            if len(indices) == 1:
+                i = indices[0]
+                decoded[i] = self._decode_and_post_process(
+                    results[i],  # type: ignore[arg-type]
+                    rms_list[i],
+                    gen_config,
+                    profile=profile,
+                )
+                continue
+
+            with profile.section("decode_stack_tokens_s", sync=True):
+                batch_tokens = torch.stack(
+                    [
+                        results[i].to(tokenizer_device)  # type: ignore[union-attr]
+                        for i in indices
+                    ],
+                    dim=0,
+                )
+            with profile.section("decode_tokenizer_s", sync=True):
+                batch_audio = self.audio_tokenizer.decode(batch_tokens).audio_values
+            for local_idx, result_idx in enumerate(indices):
+                with profile.section("postprocess_audio_s"):
+                    audio_waveform = batch_audio[local_idx].cpu().numpy()
+                    audio_waveform = self._post_process_audio(
+                        audio_waveform,
+                        postprocess_output=gen_config.postprocess_output,
+                        ref_rms=rms_list[result_idx],
+                    )
+                decoded[result_idx] = audio_waveform.squeeze(0)
+
+        for i, audio in enumerate(decoded):
+            assert audio is not None, f"Decoded audio {i} is missing"
+        return decoded  # type: ignore[return-value]
 
     def _post_process_audio(
         self,
@@ -944,18 +1407,28 @@ class OmniVoice(PreTrainedModel):
         if voice_clone_prompt is None and ref_audio is not None:
             # If voice_clone_prompt is not provided, create it from
             # ref_audio (ref_text will be auto-transcribed if not given).
-            ref_text_list = self._ensure_list(ref_text, batch_size, auto_repeat=False)
-            ref_audio_list = self._ensure_list(ref_audio, batch_size, auto_repeat=False)
+            ref_text_list = self._ensure_list(ref_text, batch_size)
+            ref_audio_list = self._ensure_list(ref_audio, batch_size)
 
             voice_clone_prompt = []
-            for i in range(len(ref_text_list)):
-                voice_clone_prompt.append(
-                    self.create_voice_clone_prompt(
+            prompt_cache = {}
+            for i in range(batch_size):
+                cache_key = self._voice_clone_prompt_cache_key(
+                    ref_audio_list[i],
+                    ref_text_list[i],
+                    preprocess_prompt,
+                )
+                if cache_key is not None and cache_key in prompt_cache:
+                    prompt = prompt_cache[cache_key]
+                else:
+                    prompt = self.create_voice_clone_prompt(
                         ref_audio=ref_audio_list[i],
                         ref_text=ref_text_list[i],
                         preprocess_prompt=preprocess_prompt,
                     )
-                )
+                    if cache_key is not None:
+                        prompt_cache[cache_key] = prompt
+                voice_clone_prompt.append(prompt)
 
         voice_clone_prompt_list = self._ensure_list(voice_clone_prompt, batch_size)
         if voice_clone_prompt_list[0] is not None:
@@ -1061,6 +1534,25 @@ class OmniVoice(PreTrainedModel):
             x_list = x_list * batch_size
         return x_list
 
+    @staticmethod
+    def _voice_clone_prompt_cache_key(
+        ref_audio: Any,
+        ref_text: Optional[str],
+        preprocess_prompt: bool,
+    ) -> Optional[tuple]:
+        if isinstance(ref_audio, str):
+            path = os.path.abspath(ref_audio)
+            try:
+                stat = os.stat(path)
+                marker = (stat.st_size, stat.st_mtime_ns)
+            except OSError:
+                marker = None
+            return ("path", path, ref_text, preprocess_prompt, marker)
+        tuple_marker = _ref_audio_tuple_cache_marker(ref_audio)
+        if tuple_marker is not None:
+            return ("memory", tuple_marker, ref_text, preprocess_prompt)
+        return None
+
     def _prepare_inference_inputs(
         self,
         text: str,
@@ -1143,7 +1635,10 @@ class OmniVoice(PreTrainedModel):
         }
 
     def _generate_iterative(
-        self, task: GenerationTask, gen_config: OmniVoiceGenerationConfig
+        self,
+        task: GenerationTask,
+        gen_config: OmniVoiceGenerationConfig,
+        profile: Optional[_GenerationProfiler] = None,
     ) -> List[torch.Tensor]:
         """N-step iterative unmasked decoding.
 
@@ -1156,6 +1651,9 @@ class OmniVoice(PreTrainedModel):
             List of generated audio token tensors of shape (C, T) (one per
             input text).
         """
+
+        if profile is None:
+            profile = _GenerationProfiler(enabled=False, device=_module_device(self))
 
         B = task.batch_size
 
@@ -1170,131 +1668,484 @@ class OmniVoice(PreTrainedModel):
                 task.target_lens[i],
             )
 
-        inputs_list = [
-            self._prepare_inference_inputs(
-                task.texts[i],
-                task.target_lens[i],
-                task.ref_texts[i],
-                task.ref_audio_tokens[i],
-                task.langs[i],
-                task.instructs[i],
-                gen_config.denoise,
-            )
-            for i in range(B)
-        ]
-
-        c_lens = [inp["input_ids"].size(2) for inp in inputs_list]
-        max_c_len = max(c_lens)
-        pad_id = self.config.audio_mask_id  # Or any other tokens
-
-        batch_input_ids = torch.full(
-            (2 * B, self.config.num_audio_codebook, max_c_len),
-            pad_id,
-            dtype=torch.long,
-            device=self.device,
-        )
-        batch_audio_mask = torch.zeros(
-            (2 * B, max_c_len), dtype=torch.bool, device=self.device
-        )
-        batch_attention_mask = torch.zeros(
-            (2 * B, 1, max_c_len, max_c_len), dtype=torch.bool, device=self.device
-        )
-
-        for i, inp in enumerate(inputs_list):
-            c_len, u_len = c_lens[i], task.target_lens[i]
-
-            # Cond (0 ~ B-1)
-            batch_input_ids[i, :, :c_len] = inp["input_ids"]
-            batch_audio_mask[i, :c_len] = inp["audio_mask"]
-            batch_attention_mask[i, :, :c_len, :c_len] = True
-
-            # Uncond (B ~ 2B-1)
-            batch_input_ids[B + i, :, :u_len] = inp["input_ids"][..., -u_len:]
-            batch_audio_mask[B + i, :u_len] = inp["audio_mask"][..., -u_len:]
-            batch_attention_mask[B + i, :, :u_len, :u_len] = True
-            if max_c_len > u_len:
-                pad_diag = torch.arange(u_len, max_c_len, device=self.device)
-                batch_attention_mask[B + i, :, pad_diag, pad_diag] = True
-
-        tokens = torch.full(
-            (B, self.config.num_audio_codebook, max(task.target_lens)),
-            self.config.audio_mask_id,
-            dtype=torch.long,
-            device=self.device,
-        )
-
-        timesteps = _get_time_steps(
-            t_start=0.0,
-            t_end=1.0,
-            num_step=gen_config.num_step,
-            t_shift=gen_config.t_shift,
-        ).tolist()
-        schedules = []
-        for t_len in task.target_lens:
-            total_mask = t_len * self.config.num_audio_codebook
-            rem = total_mask
-            sched = []
-            for step in range(gen_config.num_step):
-                num = (
-                    rem
-                    if step == gen_config.num_step - 1
-                    else min(
-                        math.ceil(total_mask * (timesteps[step + 1] - timesteps[step])),
-                        rem,
-                    )
+        with profile.section("iterative_prepare_inputs_s", sync=False):
+            inputs_list = [
+                self._prepare_inference_inputs(
+                    task.texts[i],
+                    task.target_lens[i],
+                    task.ref_texts[i],
+                    task.ref_audio_tokens[i],
+                    task.langs[i],
+                    task.instructs[i],
+                    gen_config.denoise,
                 )
-                sched.append(int(num))
-                rem -= int(num)
-            schedules.append(sched)
+                for i in range(B)
+            ]
 
-        layer_ids = torch.arange(
-            self.config.num_audio_codebook, device=self.device
-        ).view(1, -1, 1)
+        with profile.section("iterative_pack_inputs_s", sync=True):
+            c_lens = [inp["input_ids"].size(2) for inp in inputs_list]
+            real_max_c_len = max(c_lens)
+            real_max_target_len = max(task.target_lens)
+            target_len_pad = _ceil_to_multiple(
+                real_max_target_len,
+                gen_config.target_len_bucket_multiple,
+            )
+            max_c_len = _ceil_to_multiple(
+                max(real_max_c_len, target_len_pad),
+                gen_config.seq_len_bucket_multiple,
+            )
+            uncond_max_c_len = _ceil_to_multiple(
+                target_len_pad,
+                gen_config.seq_len_bucket_multiple,
+            )
+            packed_b = gen_config.batch_size_pad or B
+            if packed_b < B:
+                raise ValueError("batch_size_pad must be >= batch size")
+            pad_id = self.config.audio_mask_id  # Or any other tokens
+
+            batch_input_ids = torch.full(
+                (2 * packed_b, self.config.num_audio_codebook, max_c_len),
+                pad_id,
+                dtype=torch.long,
+                device=self.device,
+            )
+            batch_audio_mask = torch.zeros(
+                (2 * packed_b, max_c_len), dtype=torch.bool, device=self.device
+            )
+            batch_attention_mask = torch.zeros(
+                (2 * packed_b, 1, max_c_len, max_c_len),
+                dtype=torch.bool,
+                device=self.device,
+            )
+
+            for i, inp in enumerate(inputs_list):
+                c_len, u_len = c_lens[i], task.target_lens[i]
+
+                # Cond (0 ~ B-1)
+                batch_input_ids[i, :, :c_len] = inp["input_ids"]
+                batch_audio_mask[i, :c_len] = inp["audio_mask"]
+                batch_attention_mask[i, :, :c_len, :c_len] = True
+
+                # Uncond (packed_b ~ 2*packed_b-1)
+                batch_input_ids[packed_b + i, :, :u_len] = inp["input_ids"][
+                    ...,
+                    -u_len:,
+                ]
+                batch_audio_mask[packed_b + i, :u_len] = inp["audio_mask"][
+                    ...,
+                    -u_len:,
+                ]
+                batch_attention_mask[packed_b + i, :, :u_len, :u_len] = True
+                if max_c_len > u_len:
+                    pad_diag = torch.arange(u_len, max_c_len, device=self.device)
+                    batch_attention_mask[packed_b + i, :, pad_diag, pad_diag] = True
+
+            if packed_b > B:
+                pad_diag = torch.arange(max_c_len, device=self.device)
+                for i in range(B, packed_b):
+                    batch_attention_mask[i, :, pad_diag, pad_diag] = True
+                    batch_attention_mask[packed_b + i, :, pad_diag, pad_diag] = True
+
+            target_slices = [
+                (c_lens[i] - task.target_lens[i], c_lens[i]) for i in range(B)
+            ]
+            target_slices.extend((0, target_len_pad) for _ in range(B, packed_b))
+            target_slices.extend((0, task.target_lens[i]) for i in range(B))
+            target_slices.extend((0, target_len_pad) for _ in range(B, packed_b))
+            target_index, target_valid_mask = self._build_target_slice_gather_index(
+                target_slices=target_slices,
+                source_len=max_c_len,
+                target_len_pad=target_len_pad,
+                device=self.device,
+            )
+
+            tokens = torch.full(
+                (B, self.config.num_audio_codebook, real_max_target_len),
+                self.config.audio_mask_id,
+                dtype=torch.long,
+                device=self.device,
+            )
+
+            can_reuse_static_input_embeds = (
+                gen_config.reuse_static_input_embeds
+                and hasattr(self, "_prepare_embed_inputs")
+                and hasattr(self, "_refresh_target_audio_embeds")
+            )
+            batch_inputs_embeds = None
+            if can_reuse_static_input_embeds:
+                with profile.section("iterative_prepare_static_embeds_s", sync=True):
+                    batch_inputs_embeds = self._prepare_embed_inputs(
+                        batch_input_ids,
+                        batch_audio_mask,
+                    )
+            incremental_embed_refresh = batch_inputs_embeds is not None and hasattr(
+                self,
+                "_refresh_sparse_audio_embeds",
+            )
+
+        split_saved_context_tokens = max(0, max_c_len - uncond_max_c_len)
+        split_saved_context_ratio = (
+            split_saved_context_tokens / max_c_len if max_c_len > 0 else 0.0
+        )
+        (
+            effective_split_guidance_forward,
+            split_guidance_decision,
+        ) = _resolve_split_guidance_forward(
+            mode=gen_config.split_guidance_forward,
+            batch_size=B,
+            max_context_len=max_c_len,
+            uncond_context_len=uncond_max_c_len,
+            min_batch_size=gen_config.split_guidance_min_batch_size,
+            min_saved_context_ratio=gen_config.split_guidance_min_saved_context_ratio,
+        )
+
+        profile.metadata.update(
+            {
+                "iterative_batch_size": B,
+                "packed_batch_size": packed_b,
+                "real_max_context_tokens": real_max_c_len,
+                "padded_context_tokens": max_c_len,
+                "padded_uncond_context_tokens": uncond_max_c_len,
+                "split_guidance_saved_context_tokens": split_saved_context_tokens,
+                "split_guidance_saved_context_ratio": split_saved_context_ratio,
+                "real_max_target_tokens": real_max_target_len,
+                "padded_target_tokens": target_len_pad,
+                "split_guidance_forward": effective_split_guidance_forward,
+                "split_guidance_forward_mode": gen_config.split_guidance_forward,
+                "split_guidance_decision": split_guidance_decision,
+                "split_guidance_min_batch_size": gen_config.split_guidance_min_batch_size,
+                "split_guidance_min_saved_context_ratio": (
+                    gen_config.split_guidance_min_saved_context_ratio
+                ),
+                "reuse_static_input_embeds": bool(batch_inputs_embeds is not None),
+                "incremental_static_input_embed_refresh": bool(
+                    incremental_embed_refresh
+                ),
+            }
+        )
+        split_cond_bidirectional_no_mask = (
+            effective_split_guidance_forward
+            and packed_b == B
+            and all(c_len == max_c_len for c_len in c_lens)
+        )
+        split_uncond_bidirectional_no_mask = (
+            effective_split_guidance_forward
+            and packed_b == B
+            and all(t_len == target_len_pad for t_len in task.target_lens)
+        )
+        profile.metadata.update(
+            {
+                "split_cond_bidirectional_no_mask": bool(
+                    split_cond_bidirectional_no_mask
+                ),
+                "split_uncond_bidirectional_no_mask": bool(
+                    split_uncond_bidirectional_no_mask
+                ),
+            }
+        )
+
+        def _call_forward_audio_logits(forward_kwargs):
+            call_kwargs = forward_kwargs
+            while True:
+                try:
+                    return self._forward_audio_logits_for_slices(**call_kwargs)
+                except TypeError as exc:
+                    message = str(exc)
+                    if (
+                        "unexpected keyword argument 'profile'" in message
+                        and "profile" in call_kwargs
+                    ):
+                        call_kwargs = dict(call_kwargs)
+                        call_kwargs.pop("profile", None)
+                        continue
+                    if (
+                        "unexpected keyword argument 'inputs_embeds'" in message
+                        and "inputs_embeds" in call_kwargs
+                    ):
+                        call_kwargs = dict(call_kwargs)
+                        call_kwargs.pop("inputs_embeds", None)
+                        continue
+                    if (
+                        "unexpected keyword argument 'bidirectional_no_mask'" in message
+                        and "bidirectional_no_mask" in call_kwargs
+                    ):
+                        call_kwargs = dict(call_kwargs)
+                        call_kwargs.pop("bidirectional_no_mask", None)
+                        continue
+                    raise
+
+        with profile.section("iterative_schedule_s", sync=True):
+            timesteps = _get_time_steps(
+                t_start=0.0,
+                t_end=1.0,
+                num_step=gen_config.num_step,
+                t_shift=gen_config.t_shift,
+            ).tolist()
+            schedules = []
+            for t_len in task.target_lens:
+                total_mask = t_len * self.config.num_audio_codebook
+                rem = total_mask
+                sched = []
+                for step in range(gen_config.num_step):
+                    num = (
+                        rem
+                        if step == gen_config.num_step - 1
+                        else min(
+                            math.ceil(
+                                total_mask * (timesteps[step + 1] - timesteps[step])
+                            ),
+                            rem,
+                        )
+                    )
+                    sched.append(int(num))
+                    rem -= int(num)
+                schedules.append(sched)
+            update_groups_by_step = self._build_iterative_update_groups(
+                target_lens=task.target_lens,
+                schedules=schedules,
+                device=self.device,
+            )
+
+            layer_ids = torch.arange(
+                self.config.num_audio_codebook, device=self.device
+            ).view(1, -1, 1)
 
         for step in range(gen_config.num_step):
-            batch_logits = self(
-                input_ids=batch_input_ids,
-                audio_mask=batch_audio_mask,
-                attention_mask=batch_attention_mask,
-            ).logits.to(torch.float32)
+            if (
+                batch_inputs_embeds is not None
+                and step > 0
+                and not incremental_embed_refresh
+            ):
+                with profile.section("iterative_refresh_target_embeds_s", sync=True):
+                    self._refresh_target_audio_embeds(
+                        inputs_embeds=batch_inputs_embeds,
+                        input_ids=batch_input_ids,
+                        target_index=target_index,
+                        target_valid_mask=target_valid_mask,
+                    )
 
-            for i in range(B):
+            with profile.section("iterative_forward_s", sync=True):
+                if effective_split_guidance_forward:
+                    cond_forward_kwargs = {
+                        "input_ids": batch_input_ids[:packed_b],
+                        "audio_mask": batch_audio_mask[:packed_b],
+                        "attention_mask": batch_attention_mask[:packed_b],
+                        "target_slices": target_slices[:packed_b],
+                        "target_len_pad": target_len_pad,
+                        "target_index": target_index[:packed_b],
+                        "target_valid_mask": target_valid_mask[:packed_b],
+                        "bidirectional_no_mask": split_cond_bidirectional_no_mask,
+                        "profile": profile,
+                    }
+                    if batch_inputs_embeds is not None:
+                        cond_forward_kwargs["inputs_embeds"] = batch_inputs_embeds[
+                            :packed_b
+                        ]
+                    uncond_forward_kwargs = {
+                        "input_ids": batch_input_ids[
+                            packed_b:,
+                            :,
+                            :uncond_max_c_len,
+                        ],
+                        "audio_mask": batch_audio_mask[
+                            packed_b:,
+                            :uncond_max_c_len,
+                        ],
+                        "attention_mask": batch_attention_mask[
+                            packed_b:,
+                            :,
+                            :uncond_max_c_len,
+                            :uncond_max_c_len,
+                        ],
+                        "target_slices": target_slices[packed_b:],
+                        "target_len_pad": target_len_pad,
+                        "target_index": target_index[packed_b:],
+                        "target_valid_mask": target_valid_mask[packed_b:],
+                        "bidirectional_no_mask": split_uncond_bidirectional_no_mask,
+                        "profile": profile,
+                    }
+                    if batch_inputs_embeds is not None:
+                        uncond_forward_kwargs["inputs_embeds"] = batch_inputs_embeds[
+                            packed_b:,
+                            :uncond_max_c_len,
+                            :,
+                        ]
+                    with profile.section("iterative_forward_cond_s", sync=True):
+                        cond_logits = _call_forward_audio_logits(cond_forward_kwargs)
+                    with profile.section("iterative_forward_uncond_s", sync=True):
+                        uncond_logits = _call_forward_audio_logits(
+                            uncond_forward_kwargs
+                        )
+                    batch_logits = None
+                    split_cond_logits = cond_logits.to(torch.float32)
+                    split_uncond_logits = uncond_logits.to(torch.float32)
+                else:
+                    forward_kwargs = {
+                        "input_ids": batch_input_ids,
+                        "audio_mask": batch_audio_mask,
+                        "attention_mask": batch_attention_mask,
+                        "target_slices": target_slices,
+                        "target_len_pad": target_len_pad,
+                        "target_index": target_index,
+                        "target_valid_mask": target_valid_mask,
+                        "profile": profile,
+                    }
+                    if batch_inputs_embeds is not None:
+                        forward_kwargs["inputs_embeds"] = batch_inputs_embeds
+                    batch_logits = _call_forward_audio_logits(forward_kwargs).to(
+                        torch.float32
+                    )
+                    split_cond_logits = None
+                    split_uncond_logits = None
+
+            with profile.section("iterative_update_s", sync=True):
+                self._update_iterative_tokens_grouped(
+                    batch_logits=batch_logits,
+                    cond_logits=split_cond_logits,
+                    uncond_logits=split_uncond_logits,
+                    batch_input_ids=batch_input_ids,
+                    tokens=tokens,
+                    c_lens=c_lens,
+                    target_lens=task.target_lens,
+                    schedules=schedules,
+                    step=step,
+                    update_groups=update_groups_by_step[step],
+                    uncond_offset=packed_b,
+                    layer_ids=layer_ids,
+                    gen_config=gen_config,
+                    inputs_embeds=batch_inputs_embeds
+                    if incremental_embed_refresh and step < gen_config.num_step - 1
+                    else None,
+                )
+
+        with profile.section("iterative_slice_results_s", sync=True):
+            return [tokens[i, :, : task.target_lens[i]] for i in range(B)]
+
+    def _update_iterative_tokens_grouped(
+        self,
+        *,
+        batch_logits: Optional[torch.Tensor],
+        batch_input_ids: torch.Tensor,
+        tokens: torch.Tensor,
+        c_lens: list[int],
+        target_lens: list[int],
+        schedules: list[list[int]],
+        step: int,
+        uncond_offset: int,
+        layer_ids: torch.Tensor,
+        gen_config: OmniVoiceGenerationConfig,
+        update_groups: Optional[
+            list[
+                tuple[
+                    int,
+                    int,
+                    torch.LongTensor,
+                    torch.LongTensor,
+                    tuple[int, ...],
+                ]
+            ]
+        ] = None,
+        cond_logits: Optional[torch.Tensor] = None,
+        uncond_logits: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+    ) -> None:
+        if update_groups is None:
+            update_groups = self._build_iterative_update_groups(
+                target_lens=target_lens,
+                schedules=schedules,
+                device=self.device,
+            )[step]
+
+        for t_len, k, index_tensor, rows, indices in update_groups:
+            if cond_logits is not None and uncond_logits is not None:
+                c_logits = cond_logits[index_tensor, :, :t_len, :]
+                u_logits = uncond_logits[index_tensor, :, :t_len, :]
+            else:
+                if batch_logits is None:
+                    raise ValueError("batch_logits or cond/uncond logits are required")
+                c_logits = batch_logits[index_tensor, :, :t_len, :]
+                u_logits = batch_logits[uncond_offset + index_tensor, :, :t_len, :]
+
+            pred_tokens, scores = self._predict_tokens_with_scoring(
+                c_logits, u_logits, gen_config
+            )
+            scores = scores - (layer_ids * gen_config.layer_penalty_factor)
+
+            if gen_config.position_temperature > 0.0:
+                scores = _gumbel_sample(scores, gen_config.position_temperature)
+
+            sample_tokens = tokens[index_tensor, :, :t_len]
+            scores.masked_fill_(
+                sample_tokens != self.config.audio_mask_id, -float("inf")
+            )
+
+            _, topk_idx = torch.topk(scores.flatten(start_dim=1), k, dim=1)
+            flat_tokens = sample_tokens.flatten(start_dim=1)
+            flat_pred_tokens = pred_tokens.flatten(start_dim=1)
+            flat_tokens[rows, topk_idx] = flat_pred_tokens[rows, topk_idx]
+            updated_tokens = flat_tokens.view_as(sample_tokens)
+
+            tokens[index_tensor, :, :t_len] = updated_tokens
+            batch_input_ids[uncond_offset + index_tensor, :, :t_len] = updated_tokens
+            for row, i in enumerate(indices):
+                c_len = c_lens[i]
+                batch_input_ids[i : i + 1, :, c_len - t_len : c_len] = (
+                    updated_tokens[row : row + 1]
+                )
+
+            if inputs_embeds is not None:
+                updated_time_positions = topk_idx.remainder(t_len)
+                uncond_rows = (uncond_offset + index_tensor).unsqueeze(1).expand_as(
+                    updated_time_positions
+                )
+                self._refresh_sparse_audio_embeds(
+                    inputs_embeds=inputs_embeds,
+                    input_ids=batch_input_ids,
+                    batch_rows=uncond_rows,
+                    seq_positions=updated_time_positions,
+                )
+                cond_rows = index_tensor.unsqueeze(1).expand_as(
+                    updated_time_positions
+                )
+                cond_offsets = torch.tensor(
+                    [c_lens[i] - t_len for i in indices],
+                    dtype=updated_time_positions.dtype,
+                    device=updated_time_positions.device,
+                ).unsqueeze(1)
+                self._refresh_sparse_audio_embeds(
+                    inputs_embeds=inputs_embeds,
+                    input_ids=batch_input_ids,
+                    batch_rows=cond_rows,
+                    seq_positions=cond_offsets + updated_time_positions,
+                )
+
+    def _build_iterative_update_groups(
+        self,
+        *,
+        target_lens: list[int],
+        schedules: list[list[int]],
+        device: torch.device,
+    ) -> list[
+        list[tuple[int, int, torch.LongTensor, torch.LongTensor, tuple[int, ...]]]
+    ]:
+        num_steps = len(schedules[0]) if schedules else 0
+        groups_by_step = []
+        for step in range(num_steps):
+            groups: dict[tuple[int, int], list[int]] = {}
+            for i, t_len in enumerate(target_lens):
                 k = schedules[i][step]
                 if k <= 0:
                     continue
+                groups.setdefault((t_len, k), []).append(i)
 
-                c_len, t_len = c_lens[i], task.target_lens[i]
-
-                # Extract real target Logits
-                # [1, C, T, V]
-                c_logits = batch_logits[i : i + 1, :, c_len - t_len : c_len, :]
-                u_logits = batch_logits[B + i : B + i + 1, :, :t_len, :]
-
-                pred_tokens, scores = self._predict_tokens_with_scoring(
-                    c_logits, u_logits, gen_config
-                )
-
-                scores = scores - (layer_ids * gen_config.layer_penalty_factor)
-
-                if gen_config.position_temperature > 0.0:
-                    scores = _gumbel_sample(scores, gen_config.position_temperature)
-
-                sample_tokens = tokens[i : i + 1, :, :t_len]
-                scores.masked_fill_(
-                    sample_tokens != self.config.audio_mask_id, -float("inf")
-                )
-
-                _, topk_idx = torch.topk(scores.flatten(), k)
-                flat_tokens = sample_tokens.flatten()
-                flat_tokens[topk_idx] = pred_tokens.flatten()[topk_idx]
-                sample_tokens.copy_(flat_tokens.view_as(sample_tokens))
-
-                # Update individual slices into batched structure
-                tokens[i : i + 1, :, :t_len] = sample_tokens
-                batch_input_ids[i : i + 1, :, c_len - t_len : c_len] = sample_tokens
-                batch_input_ids[B + i : B + i + 1, :, :t_len] = sample_tokens
-
-        return [tokens[i, :, : task.target_lens[i]] for i in range(B)]
+            step_groups = []
+            for (t_len, k), indices in groups.items():
+                index_tuple = tuple(indices)
+                index_tensor = torch.tensor(index_tuple, dtype=torch.long, device=device)
+                rows = torch.arange(len(index_tuple), device=device).unsqueeze(1)
+                step_groups.append((t_len, k, index_tensor, rows, index_tuple))
+            groups_by_step.append(step_groups)
+        return groups_by_step
 
     def _predict_tokens_with_scoring(self, c_logits, u_logits, gen_config):
         if gen_config.guidance_scale != 0:
@@ -1309,15 +2160,15 @@ class OmniVoice(PreTrainedModel):
 
         log_probs[..., self.config.audio_mask_id] = -float("inf")
 
+        confidence_scores, greedy_tokens = log_probs.max(dim=-1)
+
         if gen_config.class_temperature > 0.0:
             filtered_probs = _filter_top_k(log_probs, ratio=0.1)
             pred_tokens = _gumbel_sample(
                 filtered_probs, gen_config.class_temperature
             ).argmax(dim=-1)
         else:
-            pred_tokens = log_probs.argmax(dim=-1)
-
-        confidence_scores = log_probs.max(dim=-1)[0]
+            pred_tokens = greedy_tokens
 
         return pred_tokens, confidence_scores
 
@@ -1325,6 +2176,42 @@ class OmniVoice(PreTrainedModel):
 # ---------------------------------------------------------------------------
 # Standalone helpers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_split_guidance_forward(
+    *,
+    mode: Union[bool, str],
+    batch_size: int,
+    max_context_len: int,
+    uncond_context_len: int,
+    min_batch_size: int,
+    min_saved_context_ratio: float,
+) -> tuple[bool, str]:
+    if isinstance(mode, str):
+        normalized = mode.strip().lower()
+    else:
+        normalized = mode
+
+    if normalized in (True, "true", "1", "yes", "y", "on", "force", "forced"):
+        return True, "forced_on"
+    if normalized in (False, "false", "0", "no", "n", "off", "none"):
+        return False, "forced_off"
+    if normalized not in ("auto", "adaptive"):
+        raise ValueError(
+            "split_guidance_forward must be true, false, or auto; "
+            f"got {mode!r}"
+        )
+
+    saved_context_tokens = max(0, max_context_len - uncond_context_len)
+    saved_context_ratio = (
+        saved_context_tokens / max_context_len if max_context_len > 0 else 0.0
+    )
+
+    if batch_size < min_batch_size:
+        return False, "auto_batch_too_small"
+    if saved_context_ratio < min_saved_context_ratio:
+        return False, "auto_context_savings_too_small"
+    return True, "auto_enabled"
 
 
 def _get_packed_mask(document_ids):
@@ -1563,6 +2450,12 @@ def _tokenize_with_nonverbal_tags(text: str, tokenizer) -> torch.Tensor:
             combined.extend(p)
         result = torch.tensor([combined], dtype=torch.long)
     return result
+
+
+def _ceil_to_multiple(value: int, multiple: int) -> int:
+    if multiple <= 1:
+        return value
+    return ((value + multiple - 1) // multiple) * multiple
 
 
 def _combine_text(text, ref_text: Optional[str] = None) -> str:

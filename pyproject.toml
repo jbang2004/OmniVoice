@@ -45,6 +45,12 @@ dependencies = [
 
 [project.optional-dependencies]
 
+serve = [
+    "fastapi",
+    "httpx",
+    "uvicorn[standard]",
+]
+
 eval = [
     "jiwer==3.1.0",       # WER
     "s3prl",               # Speech representation (HuBERT etc.)
@@ -57,6 +63,15 @@ eval = [
 [project.scripts]
 omnivoice-infer = "omnivoice.cli.infer:main"
 omnivoice-infer-batch = "omnivoice.cli.infer_batch:main"
+omnivoice-infer-online-batch = "omnivoice.cli.infer_online_batch:main"
+omnivoice-infer-stepwise-online-batch = "omnivoice.cli.infer_stepwise_online_batch:main"
+omnivoice-serve-online-batch = "omnivoice.cli.serve_online_batch:main"
+omnivoice-benchmark-http-batch = "omnivoice.cli.benchmark_http_batch:main"
+omnivoice-benchmark-http-sweep = "omnivoice.cli.benchmark_http_sweep:main"
+omnivoice-benchmark-server-sweep = "omnivoice.cli.benchmark_server_sweep:main"
+omnivoice-benchmark-scheduler-packing = "omnivoice.cli.benchmark_scheduler_packing:main"
+omnivoice-make-heterogeneous-test-list = "omnivoice.cli.make_heterogeneous_test_list:main"
+omnivoice-recommend-serving-profile = "omnivoice.cli.recommend_serving_profile:main"
 omnivoice-demo = "omnivoice.cli.demo:main"
 
 [project.urls]

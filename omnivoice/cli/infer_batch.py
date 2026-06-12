@@ -180,6 +180,25 @@ def get_parser():
         help="The temperature for class token sampling.",
     )
     parser.add_argument(
+        "--batched_decode",
+        type=str2bool,
+        default=True,
+        help=(
+            "Decode equal-length, non-chunked batch outputs in one tokenizer "
+            "call. This improves throughput but may introduce tiny "
+            "floating-point differences versus per-item decode."
+        ),
+    )
+    parser.add_argument(
+        "--reuse_static_input_embeds",
+        type=str2bool,
+        default=True,
+        help=(
+            "Cache static input embeddings during iterative decoding and only "
+            "refresh target-audio spans between steps."
+        ),
+    )
+    parser.add_argument(
         "--denoise",
         type=str2bool,
         default=True,

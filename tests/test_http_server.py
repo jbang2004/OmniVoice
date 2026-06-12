@@ -1,0 +1,439 @@
+import base64
+import io
+import unittest
+
+import numpy as np
+import soundfile as sf
+import torch
+
+from omnivoice.models.omnivoice import VoiceClonePrompt
+from omnivoice.serving import OnlineBatchServerState, SchedulerSnapshot
+from omnivoice.serving.http_server import create_online_batch_app
+
+
+class FakeScheduler:
+    def __init__(self):
+        self.started = False
+        self.stopped = False
+        self.requests = []
+        self.prompt_requests = []
+        self.reset_metrics_calls = []
+
+    async def start(self):
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+    async def submit(self, request):
+        self.requests.append(request)
+        return type(
+            "Result",
+            (),
+            {
+                "request_id": request.request_id,
+                "audio": np.zeros(240, dtype=np.float32),
+                "sample_rate": 24000,
+                "batch_size": 2,
+                "queue_wait_ms": 3.0,
+                "batch_infer_s": 0.25,
+                "batch_reason": "full",
+                "batch_cost_tokens": 120,
+                "batch_max_cost_tokens": 60,
+                "batch_context_tokens": 360,
+                "batch_max_context_tokens": 180,
+                "batch_context_padding_ratio": 1.25,
+            },
+        )()
+
+    async def create_voice_clone_prompt(
+        self,
+        *,
+        ref_audio,
+        ref_text=None,
+        preprocess_prompt=None,
+        cache_key=None,
+    ):
+        self.prompt_requests.append(
+            {
+                "ref_audio": ref_audio,
+                "ref_text": ref_text,
+                "preprocess_prompt": preprocess_prompt,
+                "cache_key": cache_key,
+            }
+        )
+        return VoiceClonePrompt(
+            ref_audio_tokens=torch.zeros((1, 1), dtype=torch.long),
+            ref_text=ref_text or "auto text",
+            ref_rms=0.1,
+        )
+
+    def snapshot(self):
+        return SchedulerSnapshot(
+            pending_high=0,
+            pending_normal=0,
+            total_batches=1,
+            total_requests=len(self.requests),
+            avg_batch_size=2.0,
+            prompt_cache_hits=0,
+            prompt_cache_misses=0,
+            last_dispatch_reason="full",
+        )
+
+    def reset_metrics(self, *, reset_prompt_cache_stats=True):
+        self.reset_metrics_calls.append(
+            {"reset_prompt_cache_stats": reset_prompt_cache_stats}
+        )
+
+
+class FailingScheduler(FakeScheduler):
+    def __init__(self, exc):
+        super().__init__()
+        self.exc = exc
+
+    async def submit(self, request):
+        raise self.exc
+
+
+class FailingPromptScheduler(FakeScheduler):
+    def __init__(self, exc):
+        super().__init__()
+        self.exc = exc
+
+    async def create_voice_clone_prompt(
+        self,
+        *,
+        ref_audio,
+        ref_text=None,
+        preprocess_prompt=None,
+        cache_key=None,
+    ):
+        raise self.exc
+
+
+def _wav_base64() -> str:
+    audio = np.zeros(240, dtype=np.float32)
+    buf = io.BytesIO()
+    sf.write(buf, audio, 24000, format="WAV")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+class HttpServerTests(unittest.TestCase):
+    def _client(self, scheduler):
+        from fastapi.testclient import TestClient
+
+        app = create_online_batch_app(
+            OnlineBatchServerState(
+                scheduler=scheduler,
+                sample_rate=24000,
+                max_request_text_chars=20,
+            )
+        )
+        return TestClient(app)
+
+    def _client_with_state(self, state):
+        from fastapi.testclient import TestClient
+
+        return TestClient(create_online_batch_app(state))
+
+    def test_healthz_reports_disabled_startup_warmup(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["scheduler"]["total_batches"], 1)
+        self.assertEqual(
+            body["startup_warmup"],
+            {
+                "enabled": False,
+                "status": "disabled",
+                "started_at": None,
+                "completed_at": None,
+                "duration_s": None,
+                "error": None,
+            },
+        )
+
+    def test_healthz_reports_completed_startup_warmup(self):
+        from fastapi.testclient import TestClient
+
+        scheduler = FakeScheduler()
+        state = OnlineBatchServerState(
+            scheduler=scheduler,
+            sample_rate=24000,
+            max_request_text_chars=20,
+        )
+        warmup_calls = []
+
+        async def warmup():
+            warmup_calls.append("called")
+
+        app = create_online_batch_app(state, startup_warmup=warmup)
+        with TestClient(app) as client:
+            response = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(warmup_calls, ["called"])
+        self.assertTrue(scheduler.started)
+        self.assertTrue(scheduler.stopped)
+        warmup_status = response.json()["startup_warmup"]
+        self.assertTrue(warmup_status["enabled"])
+        self.assertEqual(warmup_status["status"], "completed")
+        self.assertIsNotNone(warmup_status["started_at"])
+        self.assertIsNotNone(warmup_status["completed_at"])
+        self.assertGreaterEqual(warmup_status["duration_s"], 0.0)
+        self.assertIsNone(warmup_status["error"])
+
+    def test_startup_warmup_failure_records_status_and_stops_scheduler(self):
+        from fastapi.testclient import TestClient
+
+        scheduler = FakeScheduler()
+        state = OnlineBatchServerState(
+            scheduler=scheduler,
+            sample_rate=24000,
+            max_request_text_chars=20,
+        )
+
+        async def warmup():
+            raise RuntimeError("warmup failed")
+
+        app = create_online_batch_app(state, startup_warmup=warmup)
+        with self.assertRaisesRegex(RuntimeError, "warmup failed"):
+            with TestClient(app):
+                pass
+
+        self.assertTrue(scheduler.started)
+        self.assertTrue(scheduler.stopped)
+        self.assertTrue(state.startup_warmup.enabled)
+        self.assertEqual(state.startup_warmup.status, "failed")
+        self.assertIsNotNone(state.startup_warmup.started_at)
+        self.assertIsNotNone(state.startup_warmup.completed_at)
+        self.assertIsNotNone(state.startup_warmup.duration_s)
+        self.assertEqual(state.startup_warmup.error, "RuntimeError: warmup failed")
+
+    def test_tts_returns_wav_and_scheduler_headers(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/tts",
+                json={
+                    "request_id": "req-1",
+                    "text": "hello",
+                    "language": "en",
+                    "cost_tokens_hint": 77,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "audio/wav")
+        self.assertEqual(response.headers["x-omnivoice-request-id"], "req-1")
+        self.assertEqual(response.headers["x-omnivoice-batch-size"], "2")
+        self.assertEqual(response.headers["x-omnivoice-batch-cost-tokens"], "120")
+        self.assertEqual(
+            response.headers["x-omnivoice-batch-max-cost-tokens"],
+            "60",
+        )
+        self.assertEqual(response.headers["x-omnivoice-batch-context-tokens"], "360")
+        self.assertEqual(
+            response.headers["x-omnivoice-batch-max-context-tokens"],
+            "180",
+        )
+        self.assertEqual(
+            response.headers["x-omnivoice-batch-context-padding-ratio"],
+            "1.250000",
+        )
+        self.assertTrue(response.content.startswith(b"RIFF"))
+        self.assertTrue(scheduler.started)
+        self.assertTrue(scheduler.stopped)
+        self.assertEqual(scheduler.requests[0].text, "hello")
+        self.assertEqual(scheduler.requests[0].cost_tokens_hint, 77)
+
+    def test_reset_scheduler_metrics_endpoint(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/scheduler/reset_metrics",
+                json={"reset_prompt_cache_stats": False},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["reset"])
+        self.assertEqual(
+            scheduler.reset_metrics_calls,
+            [{"reset_prompt_cache_stats": False}],
+        )
+
+    def test_base64_ref_audio_gets_decoded_and_cache_keyed(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/tts",
+                json={
+                    "request_id": "clone-1",
+                    "text": "你好",
+                    "language_id": "zh",
+                    "ref_audio_base64": _wav_base64(),
+                    "ref_text": "参考音频",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        request = scheduler.requests[0]
+        self.assertIsInstance(request.ref_audio, tuple)
+        self.assertEqual(request.ref_audio[1], 24000)
+        self.assertIsNotNone(request.ref_audio_cache_key)
+        self.assertEqual(request.ref_audio_cache_key[0], "base64-sha256")
+
+    def test_batch_endpoint_returns_base64_audio_per_request(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/tts_batch",
+                json={
+                    "requests": [
+                        {"request_id": "a", "text": "A"},
+                        {"request_id": "b", "text": "B"},
+                    ]
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([item["request_id"] for item in body["results"]], ["a", "b"])
+        self.assertTrue(body["results"][0]["audio_base64"])
+        self.assertEqual(body["results"][0]["batch_cost_tokens"], 120)
+        self.assertEqual(body["results"][0]["batch_max_cost_tokens"], 60)
+        self.assertEqual(body["results"][0]["batch_context_tokens"], 360)
+        self.assertEqual(body["results"][0]["batch_max_context_tokens"], 180)
+        self.assertEqual(
+            body["results"][0]["batch_context_padding_ratio"],
+            1.25,
+        )
+        self.assertEqual([request.request_id for request in scheduler.requests], ["a", "b"])
+
+    def test_rejects_conflicting_voice_modes(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/tts",
+                json={
+                    "text": "hello",
+                    "ref_audio": "/tmp/ref.wav",
+                    "instruct": "calm",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_queue_full_maps_to_429(self):
+        scheduler = FailingScheduler(RuntimeError("OmniVoice scheduler queue is full"))
+        with self._client(scheduler) as client:
+            response = client.post("/v1/tts", json={"text": "hello"})
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.headers["retry-after"], "1")
+        self.assertEqual(response.json()["detail"]["code"], "queue_full")
+
+    def test_voice_prompt_control_queue_full_maps_to_429(self):
+        scheduler = FailingPromptScheduler(
+            RuntimeError("OmniVoice scheduler control queue is full")
+        )
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/voices",
+                json={
+                    "voice_id": "speaker-a",
+                    "ref_audio_base64": _wav_base64(),
+                    "ref_text": "参考音频",
+                },
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.headers["retry-after"], "1")
+        self.assertEqual(response.json()["detail"]["code"], "queue_full")
+
+    def test_scheduler_stopped_maps_to_503(self):
+        scheduler = FailingScheduler(RuntimeError("scheduler stopped"))
+        with self._client(scheduler) as client:
+            response = client.post("/v1/tts", json={"text": "hello"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"]["code"], "scheduler_stopped")
+
+    def test_generation_failure_maps_to_structured_500(self):
+        scheduler = FailingScheduler(ValueError("model exploded"))
+        with self._client(scheduler) as client:
+            response = client.post("/v1/tts", json={"text": "hello"})
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"]["code"], "generation_failed")
+        self.assertIn("model exploded", response.json()["detail"]["message"])
+
+    def test_register_voice_prompt_and_use_voice_id(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            register = client.post(
+                "/v1/voices",
+                json={
+                    "voice_id": "speaker-a",
+                    "ref_audio_base64": _wav_base64(),
+                    "ref_text": "参考音频",
+                    "preprocess_prompt": False,
+                },
+            )
+            response = client.post(
+                "/v1/tts",
+                json={
+                    "request_id": "tts-a",
+                    "text": "你好",
+                    "language_id": "zh",
+                    "voice_id": "speaker-a",
+                },
+            )
+
+        self.assertEqual(register.status_code, 200)
+        self.assertEqual(register.json()["voice_id"], "speaker-a")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(scheduler.prompt_requests), 1)
+        self.assertFalse(scheduler.prompt_requests[0]["preprocess_prompt"])
+        self.assertEqual(
+            scheduler.prompt_requests[0]["cache_key"][0],
+            "base64-sha256",
+        )
+        self.assertIsNotNone(scheduler.requests[0].voice_clone_prompt)
+        self.assertIsNone(scheduler.requests[0].ref_audio)
+
+    def test_unknown_voice_id_returns_404(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/tts",
+                json={
+                    "text": "hello",
+                    "voice_id": "missing",
+                },
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"]["code"], "voice_not_found")
+
+    def test_voice_id_rejects_conflicting_voice_inputs(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            response = client.post(
+                "/v1/tts",
+                json={
+                    "text": "hello",
+                    "voice_id": "speaker-a",
+                    "ref_audio": "/tmp/ref.wav",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+
+
+if __name__ == "__main__":
+    unittest.main()
