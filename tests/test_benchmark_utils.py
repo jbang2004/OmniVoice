@@ -58,11 +58,13 @@ from omnivoice.cli.infer_online_batch import (
 )
 from omnivoice.cli.infer_stepwise_online_batch import (
     _effective_compile_mode as _stepwise_effective_compile_mode,
+    _generation_config_from_args as _stepwise_generation_config_from_args,
     get_parser as get_stepwise_parser,
     _local_voice_registration_key,
     _pre_register_local_voice_prompts,
     _request_from_sample as _stepwise_request_from_sample,
     _sample_with_local_voice_prompt,
+    _scheduler_config_from_args as _stepwise_scheduler_config_from_args,
 )
 from omnivoice.cli.make_heterogeneous_test_list import build_samples
 from omnivoice.serving import BatchSchedulerConfig
@@ -1293,6 +1295,111 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertEqual(args.max_total_context_tokens, 4096)
         self.assertEqual(args.max_context_ratio, 1.5)
         self.assertEqual(args.max_context_padding_ratio, 1.75)
+
+    def test_stepwise_config_helpers_cover_supported_cli_surface(self):
+        args = get_stepwise_parser().parse_args(
+            [
+                "--test_list",
+                "/tmp/test.jsonl",
+                "--res_dir",
+                "/tmp/out",
+                "--max_running_requests",
+                "12",
+                "--max_wait_ms",
+                "25",
+                "--partial_batch_floor",
+                "3",
+                "--max_total_target_tokens",
+                "2048",
+                "--max_total_context_tokens",
+                "4096",
+                "--max_cost_ratio",
+                "1.5",
+                "--max_context_ratio",
+                "1.6",
+                "--max_context_padding_ratio",
+                "1.7",
+                "--ready_queue_capacity",
+                "96",
+                "--control_queue_capacity",
+                "5",
+                "--prompt_cache_entries",
+                "128",
+                "--profile_cuda",
+                "true",
+                "--compile_static_shape",
+                "true",
+                "--seq_len_bucket_multiple",
+                "32",
+                "--target_len_bucket_multiple",
+                "16",
+                "--lookahead_for_full_batch",
+                "false",
+                "--max_seed_lookahead",
+                "48",
+                "--generation_mode",
+                "official_compatible",
+                "--num_step",
+                "16",
+                "--guidance_scale",
+                "1.7",
+                "--t_shift",
+                "0.2",
+                "--denoise",
+                "false",
+                "--preprocess_prompt",
+                "false",
+                "--postprocess_output",
+                "false",
+                "--layer_penalty_factor",
+                "4",
+                "--position_temperature",
+                "3",
+                "--class_temperature",
+                "0.1",
+                "--audio_chunk_duration",
+                "8",
+                "--audio_chunk_threshold",
+                "16",
+                "--enforce_output_duration",
+                "true",
+            ]
+        )
+
+        scheduler_config = _stepwise_scheduler_config_from_args(args)
+        generation_config = _stepwise_generation_config_from_args(args)
+
+        self.assertEqual(scheduler_config.max_running_requests, 12)
+        self.assertEqual(scheduler_config.max_wait_ms, 25.0)
+        self.assertEqual(scheduler_config.partial_batch_floor, 3)
+        self.assertEqual(scheduler_config.max_total_target_tokens, 2048)
+        self.assertEqual(scheduler_config.max_total_context_tokens, 4096)
+        self.assertEqual(scheduler_config.max_cost_ratio, 1.5)
+        self.assertEqual(scheduler_config.max_context_ratio, 1.6)
+        self.assertEqual(scheduler_config.max_context_padding_ratio, 1.7)
+        self.assertEqual(scheduler_config.ready_queue_capacity, 96)
+        self.assertEqual(scheduler_config.control_queue_capacity, 5)
+        self.assertEqual(scheduler_config.prompt_cache_entries, 128)
+        self.assertTrue(scheduler_config.profile_cuda)
+        self.assertTrue(scheduler_config.compile_static_shape)
+        self.assertEqual(scheduler_config.seq_len_bucket_multiple, 32)
+        self.assertEqual(scheduler_config.target_len_bucket_multiple, 16)
+        self.assertFalse(scheduler_config.lookahead_for_full_batch)
+        self.assertEqual(scheduler_config.max_seed_lookahead, 48)
+
+        self.assertEqual(generation_config.generation_mode, "official_compatible")
+        self.assertEqual(generation_config.num_step, 16)
+        self.assertEqual(generation_config.guidance_scale, 1.7)
+        self.assertEqual(generation_config.t_shift, 0.2)
+        self.assertFalse(generation_config.denoise)
+        self.assertFalse(generation_config.preprocess_prompt)
+        self.assertFalse(generation_config.postprocess_output)
+        self.assertEqual(generation_config.layer_penalty_factor, 4.0)
+        self.assertEqual(generation_config.position_temperature, 3.0)
+        self.assertEqual(generation_config.class_temperature, 0.1)
+        self.assertEqual(generation_config.audio_chunk_duration, 8.0)
+        self.assertEqual(generation_config.audio_chunk_threshold, 16.0)
+        self.assertTrue(generation_config.enforce_output_duration)
 
     def test_scheduler_warmup_submits_batches_and_resets_metrics(self):
         class FakeScheduler:

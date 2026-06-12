@@ -157,6 +157,46 @@ def _effective_compile_mode(args) -> str:
     return args.compile_mode
 
 
+def _generation_config_from_args(args) -> OmniVoiceGenerationConfig:
+    return OmniVoiceGenerationConfig(
+        generation_mode=args.generation_mode,
+        num_step=args.num_step,
+        guidance_scale=args.guidance_scale,
+        t_shift=args.t_shift,
+        denoise=args.denoise,
+        preprocess_prompt=args.preprocess_prompt,
+        postprocess_output=args.postprocess_output,
+        layer_penalty_factor=args.layer_penalty_factor,
+        position_temperature=args.position_temperature,
+        class_temperature=args.class_temperature,
+        audio_chunk_duration=args.audio_chunk_duration,
+        audio_chunk_threshold=args.audio_chunk_threshold,
+        enforce_output_duration=args.enforce_output_duration,
+    )
+
+
+def _scheduler_config_from_args(args) -> StepwiseSchedulerConfig:
+    return StepwiseSchedulerConfig(
+        max_running_requests=args.max_running_requests,
+        max_wait_ms=args.max_wait_ms,
+        partial_batch_floor=args.partial_batch_floor,
+        max_total_target_tokens=args.max_total_target_tokens,
+        max_total_context_tokens=args.max_total_context_tokens,
+        max_cost_ratio=args.max_cost_ratio,
+        max_context_ratio=args.max_context_ratio,
+        max_context_padding_ratio=args.max_context_padding_ratio,
+        ready_queue_capacity=args.ready_queue_capacity,
+        control_queue_capacity=args.control_queue_capacity,
+        prompt_cache_entries=args.prompt_cache_entries,
+        profile_cuda=args.profile_cuda,
+        compile_static_shape=args.compile_static_shape,
+        seq_len_bucket_multiple=args.seq_len_bucket_multiple,
+        target_len_bucket_multiple=args.target_len_bucket_multiple,
+        lookahead_for_full_batch=args.lookahead_for_full_batch,
+        max_seed_lookahead=args.max_seed_lookahead,
+    )
+
+
 def _request_from_sample(sample: dict[str, Any]) -> OmniVoiceBatchRequest:
     return OmniVoiceBatchRequest(
         request_id=str(sample.get("id") or sample.get("save_name")),
@@ -321,41 +361,9 @@ async def _run(args) -> dict[str, Any]:
             mode=compile_mode,
             fullgraph=False,
         )
-    generation_config = OmniVoiceGenerationConfig(
-        generation_mode=args.generation_mode,
-        num_step=args.num_step,
-        guidance_scale=args.guidance_scale,
-        t_shift=args.t_shift,
-        denoise=args.denoise,
-        preprocess_prompt=args.preprocess_prompt,
-        postprocess_output=args.postprocess_output,
-        layer_penalty_factor=args.layer_penalty_factor,
-        position_temperature=args.position_temperature,
-        class_temperature=args.class_temperature,
-        audio_chunk_duration=args.audio_chunk_duration,
-        audio_chunk_threshold=args.audio_chunk_threshold,
-        enforce_output_duration=args.enforce_output_duration,
-    )
+    generation_config = _generation_config_from_args(args)
     samples = read_test_list(args.test_list)
-    scheduler_config = StepwiseSchedulerConfig(
-        max_running_requests=args.max_running_requests,
-        max_wait_ms=args.max_wait_ms,
-        partial_batch_floor=args.partial_batch_floor,
-        max_total_target_tokens=args.max_total_target_tokens,
-        max_total_context_tokens=args.max_total_context_tokens,
-        max_cost_ratio=args.max_cost_ratio,
-        max_context_ratio=args.max_context_ratio,
-        max_context_padding_ratio=args.max_context_padding_ratio,
-        ready_queue_capacity=args.ready_queue_capacity,
-        control_queue_capacity=args.control_queue_capacity,
-        prompt_cache_entries=args.prompt_cache_entries,
-        profile_cuda=args.profile_cuda,
-        compile_static_shape=args.compile_static_shape,
-        seq_len_bucket_multiple=args.seq_len_bucket_multiple,
-        target_len_bucket_multiple=args.target_len_bucket_multiple,
-        lookahead_for_full_batch=args.lookahead_for_full_batch,
-        max_seed_lookahead=args.max_seed_lookahead,
-    )
+    scheduler_config = _scheduler_config_from_args(args)
 
     if args.warmup > 0:
         logging.info("Running %d warmup iterations", args.warmup)
