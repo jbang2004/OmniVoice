@@ -20,8 +20,32 @@ from typing import Any, Callable, Deque, Optional, Sequence
 import numpy as np
 import soundfile as sf
 
-from omnivoice.models.generation import ensure_bool, resolve_optional_bool_flags
+from omnivoice.models.generation import (
+    ensure_bool,
+    ensure_non_negative_float,
+    ensure_positive_float,
+    ensure_positive_int,
+    resolve_optional_bool_flags,
+)
 from omnivoice.models.omnivoice import VoiceClonePrompt, _ref_audio_tuple_cache_marker
+
+
+def _ensure_non_negative_int(value: int, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a non-negative integer")
+    if not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{name} must be a non-negative integer")
+    normalized = int(value)
+    if normalized < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return normalized
+
+
+def _ensure_min_float(value: float, name: str, minimum: float) -> float:
+    normalized = ensure_non_negative_float(value, name)
+    if normalized < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -50,6 +74,72 @@ class BatchSchedulerConfig:
     adaptive_memory_batch_cap: bool = True
     adaptive_memory_cap_recovery_successes: int = 64
     max_generation_batches_before_control: int = 8
+
+    def __post_init__(self):
+        for field_name in (
+            "max_batch_size",
+            "partial_batch_floor",
+            "max_total_target_tokens",
+            "max_total_context_tokens",
+            "ready_queue_capacity",
+            "control_queue_capacity",
+            "frame_rate",
+            "max_seed_lookahead",
+            "adaptive_memory_cap_recovery_successes",
+            "max_generation_batches_before_control",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                ensure_positive_int(getattr(self, field_name), field_name),
+            )
+        object.__setattr__(
+            self,
+            "prompt_cache_entries",
+            _ensure_non_negative_int(
+                self.prompt_cache_entries,
+                "prompt_cache_entries",
+            ),
+        )
+        for field_name in ("max_wait_ms", "max_context_padding_ratio"):
+            object.__setattr__(
+                self,
+                field_name,
+                ensure_non_negative_float(getattr(self, field_name), field_name),
+            )
+        for field_name in ("max_cost_ratio", "max_context_ratio"):
+            object.__setattr__(
+                self,
+                field_name,
+                _ensure_min_float(getattr(self, field_name), field_name, 1.0),
+            )
+        object.__setattr__(
+            self,
+            "partial_lookahead_max_wait_multiplier",
+            ensure_positive_float(
+                self.partial_lookahead_max_wait_multiplier,
+                "partial_lookahead_max_wait_multiplier",
+            ),
+        )
+        for field_name in (
+            "use_model_duration_estimator",
+            "lookahead_for_full_batch",
+            "lookahead_for_partial_batch",
+            "split_retry_on_memory_error",
+            "adaptive_memory_batch_cap",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                ensure_bool(getattr(self, field_name), field_name),
+            )
+        valid_pack_policies = {"target", "context", "target_context"}
+        if self.candidate_pack_policy not in valid_pack_policies:
+            choices = ", ".join(sorted(valid_pack_policies))
+            raise ValueError(
+                "candidate_pack_policy must be one of "
+                f"{choices}; got {self.candidate_pack_policy!r}"
+            )
 
 
 @dataclass(frozen=True)

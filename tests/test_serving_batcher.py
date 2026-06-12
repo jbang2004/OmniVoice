@@ -492,6 +492,33 @@ class BatchSchedulerTests(unittest.IsolatedAsyncioTestCase):
                 config=BatchSchedulerConfig(candidate_pack_policy="unknown"),
             )
 
+    async def test_batch_scheduler_config_rejects_invalid_values(self):
+        invalid_cases = (
+            ("max_batch_size", 0, "positive integer"),
+            ("max_batch_size", "8", "positive integer"),
+            ("prompt_cache_entries", -1, "non-negative integer"),
+            ("max_wait_ms", "120.0", "non-negative number"),
+            ("max_cost_ratio", 0.9, ">= 1.0"),
+            ("partial_lookahead_max_wait_multiplier", 0.0, "positive number"),
+            ("lookahead_for_full_batch", "true", "must be bool"),
+        )
+
+        for field_name, value, message in invalid_cases:
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, f"{field_name}.*{message}"):
+                    BatchSchedulerConfig(**{field_name: value})
+
+    async def test_batch_scheduler_config_allows_explicit_disabled_limits(self):
+        config = BatchSchedulerConfig(
+            max_wait_ms=0.0,
+            max_context_padding_ratio=0.0,
+            prompt_cache_entries=0,
+        )
+
+        self.assertEqual(config.max_wait_ms, 0.0)
+        self.assertEqual(config.max_context_padding_ratio, 0.0)
+        self.assertEqual(config.prompt_cache_entries, 0)
+
     async def test_context_padding_ratio_limits_hidden_padding_work(self):
         scheduler = OmniVoiceBatchScheduler(
             FakeModel(),

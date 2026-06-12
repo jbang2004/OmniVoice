@@ -20,6 +20,8 @@ import torch
 from omnivoice.models.generation import (
     OmniVoiceGenerationConfig,
     ensure_bool,
+    ensure_non_negative_float,
+    ensure_positive_int,
     fit_audio_to_duration,
     resolve_optional_bool_flags,
 )
@@ -27,6 +29,8 @@ from omnivoice.serving.batcher import (
     OmniVoiceBatchRequest,
     OmniVoiceBatchResult,
     _VoiceClonePromptCache,
+    _ensure_min_float,
+    _ensure_non_negative_int,
 )
 from omnivoice.serving.stepwise import (
     StepwiseGenerationState,
@@ -55,6 +59,55 @@ class StepwiseSchedulerConfig:
     target_len_bucket_multiple: int = 64
     lookahead_for_full_batch: bool = True
     max_seed_lookahead: int = 32
+
+    def __post_init__(self):
+        for field_name in (
+            "max_running_requests",
+            "partial_batch_floor",
+            "max_total_target_tokens",
+            "max_total_context_tokens",
+            "ready_queue_capacity",
+            "control_queue_capacity",
+            "frame_rate",
+            "seq_len_bucket_multiple",
+            "target_len_bucket_multiple",
+            "max_seed_lookahead",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                ensure_positive_int(getattr(self, field_name), field_name),
+            )
+        object.__setattr__(
+            self,
+            "prompt_cache_entries",
+            _ensure_non_negative_int(
+                self.prompt_cache_entries,
+                "prompt_cache_entries",
+            ),
+        )
+        for field_name in ("max_wait_ms", "max_context_padding_ratio"):
+            object.__setattr__(
+                self,
+                field_name,
+                ensure_non_negative_float(getattr(self, field_name), field_name),
+            )
+        for field_name in ("max_cost_ratio", "max_context_ratio"):
+            object.__setattr__(
+                self,
+                field_name,
+                _ensure_min_float(getattr(self, field_name), field_name, 1.0),
+            )
+        for field_name in (
+            "profile_cuda",
+            "compile_static_shape",
+            "lookahead_for_full_batch",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                ensure_bool(getattr(self, field_name), field_name),
+            )
 
 
 @dataclass(frozen=True)

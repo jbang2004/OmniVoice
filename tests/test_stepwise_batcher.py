@@ -374,6 +374,33 @@ class StepwiseAdmissionTests(unittest.TestCase):
 
         self.assertEqual(scheduler._estimate_target_tokens(req), 125)
 
+    def test_stepwise_scheduler_config_rejects_invalid_values(self):
+        invalid_cases = (
+            ("max_running_requests", 0, "positive integer"),
+            ("max_running_requests", "8", "positive integer"),
+            ("prompt_cache_entries", -1, "non-negative integer"),
+            ("max_wait_ms", "120.0", "non-negative number"),
+            ("max_cost_ratio", 0.9, ">= 1.0"),
+            ("seq_len_bucket_multiple", 0, "positive integer"),
+            ("lookahead_for_full_batch", "true", "must be bool"),
+        )
+
+        for field_name, value, message in invalid_cases:
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, f"{field_name}.*{message}"):
+                    StepwiseSchedulerConfig(**{field_name: value})
+
+    def test_stepwise_scheduler_config_allows_explicit_disabled_limits(self):
+        config = StepwiseSchedulerConfig(
+            max_wait_ms=0.0,
+            max_context_padding_ratio=0.0,
+            prompt_cache_entries=0,
+        )
+
+        self.assertEqual(config.max_wait_ms, 0.0)
+        self.assertEqual(config.max_context_padding_ratio, 0.0)
+        self.assertEqual(config.prompt_cache_entries, 0)
+
     def test_invalid_enforce_output_duration_flag_fails_before_preprocess(self):
         model = _PreprocessCountingModel()
         scheduler = StepwiseOmniVoiceScheduler(model=model)
