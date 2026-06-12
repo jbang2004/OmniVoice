@@ -161,6 +161,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup_batches", type=int, default=2)
     parser.add_argument("--warmup_fill_batch", type=str2bool, default=False)
     parser.add_argument("--max_request_text_chars", type=int, default=2000)
+    parser.add_argument("--max_voice_prompts", type=int, default=256)
     parser.add_argument("--server_log_level", default="warning")
     parser.add_argument("--startup_timeout_s", type=float, default=180.0)
     parser.add_argument("--shutdown_timeout_s", type=float, default=20.0)
@@ -490,6 +491,8 @@ def _build_server_command(args: argparse.Namespace, profile: dict[str, Any]) -> 
         _bool_cli(args.warmup_fill_batch),
         "--max_request_text_chars",
         str(args.max_request_text_chars),
+        "--max_voice_prompts",
+        str(args.max_voice_prompts),
         "--log_level",
         args.server_log_level,
     ]

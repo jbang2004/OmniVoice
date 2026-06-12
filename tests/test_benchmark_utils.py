@@ -762,6 +762,7 @@ class BenchmarkUtilsTests(unittest.TestCase):
             warmup_batches=2,
             warmup_fill_batch=True,
             max_request_text_chars=2000,
+            max_voice_prompts=512,
             server_log_level="warning",
             test_list="/tmp/test.jsonl",
             res_dir="/tmp/results",
@@ -799,6 +800,7 @@ class BenchmarkUtilsTests(unittest.TestCase):
         self.assertIn("--warmup_test_list", command)
         self.assertIn("/tmp/warmup.jsonl", command)
         self.assertEqual(command[command.index("--warmup_fill_batch") + 1], "true")
+        self.assertEqual(command[command.index("--max_voice_prompts") + 1], "512")
         self.assertEqual(command[command.index("--batch_size") + 1], "8")
         self.assertEqual(command[command.index("--max_wait_ms") + 1], "40.0")
         self.assertEqual(

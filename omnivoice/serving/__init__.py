@@ -21,6 +21,10 @@ from omnivoice.serving.profiles import (
     recommended_runtime_config,
     summarize_workload,
 )
+from omnivoice.serving.voice_registry import (
+    VoicePromptRegistry,
+    VoicePromptRegistrySnapshot,
+)
 from omnivoice.serving.stepwise import (
     StepwiseGenerationState,
     StepwiseStepTimings,
@@ -59,5 +63,7 @@ __all__ = [
     "StepwiseOmniVoiceScheduler",
     "StepwiseSchedulerConfig",
     "StepwiseSchedulerSnapshot",
+    "VoicePromptRegistry",
+    "VoicePromptRegistrySnapshot",
     "build_static_step_shape",
 ]

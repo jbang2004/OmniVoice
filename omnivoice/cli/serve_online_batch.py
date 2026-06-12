@@ -143,6 +143,12 @@ def get_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--max_request_text_chars", type=int, default=2000)
+    parser.add_argument(
+        "--max_voice_prompts",
+        type=int,
+        default=256,
+        help="Maximum registered voice prompts kept by the HTTP server LRU registry.",
+    )
     parser.add_argument("--log_level", default="info")
     return parser
 
@@ -362,6 +368,7 @@ def build_app(args):
         scheduler=scheduler,
         sample_rate=model.sampling_rate,
         max_request_text_chars=args.max_request_text_chars,
+        max_voice_prompts=args.max_voice_prompts,
     )
     return create_online_batch_app(state, startup_warmup=startup_warmup)
 

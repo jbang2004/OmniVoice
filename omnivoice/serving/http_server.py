@@ -9,7 +9,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal, Optional
+from typing import Any, Awaitable, Callable, Literal, Mapping, Optional
 
 import numpy as np
 import soundfile as sf
@@ -18,6 +18,7 @@ from omnivoice.serving.batcher import (
     OmniVoiceBatchRequest,
     OmniVoiceBatchScheduler,
 )
+from omnivoice.serving.voice_registry import VoicePromptRegistry
 from omnivoice.models.omnivoice import VoiceClonePrompt
 from omnivoice.utils.audio import load_audio_bytes
 
@@ -76,8 +77,23 @@ class OnlineBatchServerState:
     scheduler: OmniVoiceBatchScheduler
     sample_rate: int = 24000
     max_request_text_chars: int = 2000
-    voice_prompts: dict[str, VoiceClonePrompt] = field(default_factory=dict)
+    max_voice_prompts: Optional[int] = 256
+    voice_prompts: Optional[
+        VoicePromptRegistry | Mapping[str, VoiceClonePrompt]
+    ] = None
     startup_warmup: StartupWarmupStatus = field(default_factory=StartupWarmupStatus)
+
+    def __post_init__(self):
+        if isinstance(self.voice_prompts, VoicePromptRegistry):
+            return
+        object.__setattr__(
+            self,
+            "voice_prompts",
+            VoicePromptRegistry(
+                max_entries=self.max_voice_prompts,
+                initial=self.voice_prompts or {},
+            ),
+        )
 
 
 def _require_fastapi():
@@ -273,6 +289,7 @@ def create_online_batch_app(
         return {
             "ok": warmup_status["status"] != "failed",
             "scheduler": snapshot.__dict__,
+            "voices": state.voice_prompts.snapshot().__dict__,
             "startup_warmup": warmup_status,
         }
 
@@ -333,11 +350,27 @@ def create_online_batch_app(
             )
         except RuntimeError as exc:
             raise map_scheduler_runtime_error(exc) from exc
-        state.voice_prompts[voice_id] = prompt
+        state.voice_prompts.put(voice_id, prompt)
         return {
             "voice_id": voice_id,
             "ref_text": prompt.ref_text,
             "registered": True,
+            "voices": state.voice_prompts.snapshot().__dict__,
+        }
+
+    @app.get("/v1/voices")
+    async def list_voices() -> dict[str, Any]:
+        return state.voice_prompts.snapshot().__dict__
+
+    @app.delete("/v1/voices/{voice_id}")
+    async def delete_voice(voice_id: str) -> dict[str, Any]:
+        deleted = voice_id in state.voice_prompts
+        if deleted:
+            del state.voice_prompts[voice_id]
+        return {
+            "voice_id": voice_id,
+            "deleted": deleted,
+            "voices": state.voice_prompts.snapshot().__dict__,
         }
 
     async def submit_request(request: OmniVoiceBatchRequest):
@@ -428,4 +461,8 @@ def create_online_batch_app(
     return app
 
 
-__all__ = ["OnlineBatchServerState", "StartupWarmupStatus", "create_online_batch_app"]
+__all__ = [
+    "OnlineBatchServerState",
+    "StartupWarmupStatus",
+    "create_online_batch_app",
+]

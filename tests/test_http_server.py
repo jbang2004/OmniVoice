@@ -406,6 +406,97 @@ class HttpServerTests(unittest.TestCase):
         self.assertIsNotNone(scheduler.requests[0].voice_clone_prompt)
         self.assertIsNone(scheduler.requests[0].ref_audio)
 
+    def test_voice_registry_is_bounded_and_lru_evicted(self):
+        scheduler = FakeScheduler()
+        state = OnlineBatchServerState(
+            scheduler=scheduler,
+            sample_rate=24000,
+            max_request_text_chars=20,
+            max_voice_prompts=1,
+        )
+        with self._client_with_state(state) as client:
+            first = client.post(
+                "/v1/voices",
+                json={
+                    "voice_id": "speaker-a",
+                    "ref_audio_base64": _wav_base64(),
+                    "ref_text": "第一段",
+                },
+            )
+            second = client.post(
+                "/v1/voices",
+                json={
+                    "voice_id": "speaker-b",
+                    "ref_audio_base64": _wav_base64(),
+                    "ref_text": "第二段",
+                },
+            )
+            voices = client.get("/v1/voices")
+            missing = client.post(
+                "/v1/tts",
+                json={"text": "hello", "voice_id": "speaker-a"},
+            )
+            present = client.post(
+                "/v1/tts",
+                json={"text": "hello", "voice_id": "speaker-b"},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(voices.status_code, 200)
+        self.assertEqual(voices.json()["size"], 1)
+        self.assertEqual(voices.json()["max_entries"], 1)
+        self.assertEqual(voices.json()["evictions"], 1)
+        self.assertEqual(voices.json()["voice_ids"], ["speaker-b"])
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(present.status_code, 200)
+
+    def test_voice_registry_delete_endpoint(self):
+        scheduler = FakeScheduler()
+        with self._client(scheduler) as client:
+            client.post(
+                "/v1/voices",
+                json={
+                    "voice_id": "speaker-a",
+                    "ref_audio_base64": _wav_base64(),
+                    "ref_text": "参考音频",
+                },
+            )
+            deleted = client.delete("/v1/voices/speaker-a")
+            missing_delete = client.delete("/v1/voices/speaker-a")
+            response = client.post(
+                "/v1/tts",
+                json={"text": "hello", "voice_id": "speaker-a"},
+            )
+
+        self.assertEqual(deleted.status_code, 200)
+        self.assertTrue(deleted.json()["deleted"])
+        self.assertEqual(deleted.json()["voices"]["size"], 0)
+        self.assertFalse(missing_delete.json()["deleted"])
+        self.assertEqual(response.status_code, 404)
+
+    def test_voice_prompts_dict_initialization_remains_supported(self):
+        scheduler = FakeScheduler()
+        prompt = VoiceClonePrompt(
+            ref_audio_tokens=torch.zeros((1, 1), dtype=torch.long),
+            ref_text="existing",
+            ref_rms=0.1,
+        )
+        state = OnlineBatchServerState(
+            scheduler=scheduler,
+            voice_prompts={"speaker-a": prompt},
+        )
+        with self._client_with_state(state) as client:
+            voices = client.get("/v1/voices")
+            response = client.post(
+                "/v1/tts",
+                json={"text": "hello", "voice_id": "speaker-a"},
+            )
+
+        self.assertEqual(voices.json()["voice_ids"], ["speaker-a"])
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(scheduler.requests[0].voice_clone_prompt, prompt)
+
     def test_unknown_voice_id_returns_404(self):
         scheduler = FakeScheduler()
         with self._client(scheduler) as client:
