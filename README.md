@@ -104,6 +104,15 @@ cd OmniVoice
 pip install -e .
 ```
 
+Online serving and HTTP benchmark commands require the optional serving
+dependencies:
+
+```bash
+pip install "omnivoice[serve]"
+# or, from a source checkout:
+pip install -e ".[serve]"
+```
+
 ### uv
 
 Clone the repository and sync dependencies:
@@ -255,9 +264,12 @@ Several CLI entry points are provided. The CLI tools support all features availa
 | `omnivoice-infer-batch` | Offline batch inference across multiple GPUs | [omnivoice/cli/infer_batch.py](omnivoice/cli/infer_batch.py) |
 | `omnivoice-serve-online-batch` | HTTP server with online micro-batching | [docs/serving.md](docs/serving.md) |
 | `omnivoice-infer-online-batch` | In-process online micro-batch benchmark | [docs/serving.md](docs/serving.md) |
+| `omnivoice-recommend-serving-profile` | Recommend a measured serving profile for a JSONL workload | [docs/serving.md](docs/serving.md) |
 | `omnivoice-benchmark-http-batch` | Concurrent HTTP load benchmark | [docs/serving.md](docs/serving.md) |
 | `omnivoice-benchmark-http-sweep` | HTTP client load-profile sweep | [docs/serving.md](docs/serving.md) |
 | `omnivoice-benchmark-server-sweep` | Server and client sweep with ranking | [docs/serving.md](docs/serving.md) |
+| `omnivoice-benchmark-scheduler-packing` | Offline packing-policy simulator | [docs/serving.md](docs/serving.md) |
+| `omnivoice-make-heterogeneous-test-list` | Generate heterogeneous benchmark JSONL inputs | [docs/serving.md](docs/serving.md) |
 
 The step-level continuous-batching prototype is kept under
 `omnivoice.experimental` for research and regression tests. It is not installed

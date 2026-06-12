@@ -182,6 +182,42 @@ python -m omnivoice.experimental.infer_stepwise_online_batch --help
 
 ## Benchmarking
 
+The serving tools are split by purpose:
+
+- `omnivoice-recommend-serving-profile` inspects a representative JSONL and
+  emits a measured profile plus the matching `omnivoice-serve-online-batch`
+  command.
+- `omnivoice-make-heterogeneous-test-list` creates short/long mixed JSONL
+  traffic for scheduler experiments.
+- `omnivoice-benchmark-scheduler-packing` simulates packing policies without
+  loading the model or touching the GPU.
+- `omnivoice-infer-online-batch`, `omnivoice-benchmark-http-batch`,
+  `omnivoice-benchmark-http-sweep`, and `omnivoice-benchmark-server-sweep`
+  measure real generation throughput.
+
+For a first-pass recommendation:
+
+```bash
+omnivoice-recommend-serving-profile \
+  --test_list validation.jsonl \
+  --concurrency 12
+```
+
+To build a small context-outlier workload and compare packing policies before
+running GPU benchmarks:
+
+```bash
+omnivoice-make-heterogeneous-test-list \
+  --output results/heterogeneous.jsonl \
+  --ref_audio ref.wav \
+  --ref_text "Reference transcript."
+
+omnivoice-benchmark-scheduler-packing \
+  --test_list results/heterogeneous.jsonl \
+  --policies target,target_context \
+  --batch_size 12
+```
+
 Use the included server sweep helper to run repeatable load tests:
 
 ```bash
